@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import queue
+import subprocess
 import sys
+import threading
 import tkinter as tk
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 from azp.config import DEFAULT_CONFIG_PATH
 from azp.contracts import AzpError, Settings, SlideDoc, ZoteroSource
@@ -17,7 +20,7 @@ from azp.ppt import (
     is_powerpoint_addin_installed,
     uninstall_powerpoint_addin,
 )
-from azp.updater import update_project_code
+from azp.updater import auto_update_if_needed, update_project_code
 from azp.zotero import ZoteroClient
 
 
@@ -125,6 +128,92 @@ def focus_existing_azp_window() -> bool:
     return False
 
 
+def reload_window_after_update(
+    window: AzpWindow,
+    message: str,
+    popen_fn: Callable[..., object] = subprocess.Popen,
+) -> bool:
+    """Uruchamia zaktualizowany proces okienka i zamyka bieżące okienko."""
+    try:
+        if not window.root.winfo_exists():
+            return False
+    except Exception:
+        return False
+
+    window.controller.status_message = message
+    window.status_var.set("Pobrano aktualizację – przeładowywanie okienka...")
+    window.root.withdraw()
+    try:
+        popen_fn(
+            [sys.executable, "-m", "azp", "--no-auto-update"],
+            cwd=str(Path(__file__).resolve().parent.parent),
+        )
+    except Exception:
+        window.root.deiconify()
+        window.status_var.set(
+            "Pobrano aktualizację – uruchom okienko ponownie, aby wczytać nową wersję."
+        )
+        return False
+
+    window.destroy()
+    return True
+
+
+def start_background_auto_update(
+    window: AzpWindow,
+    update_fn: Callable[[], tuple[bool, str]] = auto_update_if_needed,
+    addin_fn: Callable[[], object] = install_powerpoint_addin,
+    reload_fn: Callable[[AzpWindow, str], bool] = reload_window_after_update,
+) -> threading.Thread:
+    """Uruchamia sprawdzanie aktualizacji w tle i przeładowuje okienko po pobraniu zmian."""
+    pending_reload: queue.SimpleQueue[str | None] = queue.SimpleQueue()
+
+    def _worker() -> None:
+        reload_msg: str | None = None
+        try:
+            changed, msg = update_fn()
+            if changed:
+                try:
+                    addin_fn()
+                except Exception:
+                    pass
+                reload_msg = msg
+        except Exception:
+            pass
+        finally:
+            pending_reload.put(reload_msg)
+
+    thread = threading.Thread(target=_worker, name="azp-auto-update", daemon=True)
+
+    def _poll_reload() -> None:
+        try:
+            if not window.root.winfo_exists():
+                return
+        except Exception:
+            return
+        try:
+            msg = pending_reload.get_nowait()
+        except queue.Empty:
+            try:
+                window.root.after(50, _poll_reload)
+            except Exception:
+                pass
+            return
+        if msg is None:
+            return
+        try:
+            reload_fn(window, msg)
+        except Exception:
+            pass
+
+    thread.start()
+    try:
+        window.root.after(20, _poll_reload)
+    except Exception:
+        pass
+    return thread
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Uruchamia pływające okienko AZP lub instalator dodatku wstążki PowerPointa."""
     args = list(sys.argv[1:] if argv is None else argv)
@@ -164,7 +253,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Zainstalowano dodatek wstążki PowerPointa: {ppam}")
         return 0 if ok else 1
 
-    if focus_existing_azp_window():
+    no_auto_update = "--no-auto-update" in args
+    if not no_auto_update and focus_existing_azp_window():
         return 0
 
     try:
@@ -174,6 +264,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         pass
 
     window = build_window()
+    if not no_auto_update:
+        start_background_auto_update(window)
     window.run()
     return 0
 
@@ -183,4 +275,6 @@ __all__ = [
     "describe_error",
     "focus_existing_azp_window",
     "main",
+    "reload_window_after_update",
+    "start_background_auto_update",
 ]

@@ -17,7 +17,9 @@ Pływające okienko dla systemu Windows do wstawiania cytowań z **Zotero** bezp
 
 ## Aktualizacja do najnowszej wersji
 
-Kliknij dwukrotnie **`instaluj_lub_aktualizuj.bat`** – skrypt sam pobierze najnowszą wersję z GitHuba przez `git pull` lub ZIP, zaktualizuje pakiety oraz odświeży dodatek wstążki PowerPointa, zachowując Twoje ustawienia w `config.json`.
+Program **aktualizuje się automatycznie w tle** po otwarciu okienka – pobiera nową wersję z GitHuba przez Git lub ZIP (zachowując Twoje ustawienia w `config.json`), odświeża dodatek PowerPointa i automatycznie przeładowuje okienko.
+
+Ręcznie możesz też w każdej chwili kliknąć dwukrotnie **`instaluj_lub_aktualizuj.bat`**, aby wymusić aktualizację kodu, pakietów Pythona oraz dodatku wstążki.
 
 ## Uruchamianie ręczne i komendy
 

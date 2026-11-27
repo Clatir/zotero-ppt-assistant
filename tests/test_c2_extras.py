@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import subprocess
+import time
 import tkinter as tk
 import zipfile
 from pathlib import Path
@@ -459,8 +460,9 @@ def test_extract_github_zip_bytes_extracts_preserves_config_skips_git_and_blocks
 def test_update_from_github_zip_downloads_and_extracts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from azp.updater import update_from_github_zip
+    from azp.updater import auto_update_if_needed, update_from_github_zip
 
+    sha = "d" * 40
     payload = _build_zip_bytes(
         {
             "zotero-ppt-assistant-main/azp/new_mod.py": b"VALUE = 1\n",
@@ -487,11 +489,22 @@ def test_update_from_github_zip_downloads_and_extracts(
         return _FakeResponse(payload)
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("azp.updater.fetch_remote_main_sha", lambda **_kw: sha)
     ok, msg = update_from_github_zip(tmp_path, zip_url="https://example.invalid/archive.zip", timeout=12.0)
     assert ok is True
     assert "1" in msg
     assert seen_urls == [("https://example.invalid/archive.zip", 12.0)]
     assert (tmp_path / "azp" / "new_mod.py").read_text(encoding="utf-8") == "VALUE = 1\n"
+    assert (tmp_path / ".azp_version").read_text(encoding="utf-8").strip() == sha
+
+    # Kolejne auto_update_if_needed widzi zgodny SHA w .azp_version i nie pobiera ZIP-a
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *_args, **_kw: (_ for _ in ()).throw(AssertionError("ZIP nie powinien być pobierany")),
+    )
+    changed, auto_msg = auto_update_if_needed(project_root=tmp_path)
+    assert changed is False
+    assert "aktualna" in auto_msg.lower()
 
 
 def test_update_from_git_handles_missing_git_dirty_tree_and_clean_pull(
@@ -665,9 +678,255 @@ def test_install_or_update_bat_and_readme_exist_and_have_expected_content() -> N
 
     readme_text = readme_path.read_text(encoding="utf-8")
     assert "instaluj_lub_aktualizuj.bat" in readme_text
+    assert "automatycznie w tle" in readme_text
     assert "IEEE v4" in readme_text
     assert "APA 7" in readme_text
     assert "config.json" in readme_text
     assert "start_azp.bat" in readme_text
     assert "install_pp_addin.bat" in readme_text
     assert "--uninstall-addin" in readme_text
+
+    gitignore_lines = [
+        line.strip()
+        for line in (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    ]
+    assert ".azp_version" in gitignore_lines
+
+
+def test_fetch_remote_main_sha_supports_raw_hex_json_and_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from azp.updater import fetch_remote_main_sha
+
+    sha = "a" * 40
+
+    class _Resp:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+
+        def read(self) -> bytes:
+            return self._body
+
+        def __enter__(self) -> _Resp:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kw: _Resp(sha.encode("utf-8")))
+    assert fetch_remote_main_sha() == sha
+
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *_args, **_kw: _Resp(json.dumps({"sha": sha.upper()}).encode("utf-8")),
+    )
+    assert fetch_remote_main_sha() == sha
+
+    def raise_err(*_args: object, **_kw: object) -> object:
+        raise OSError("network down")
+
+    monkeypatch.setattr("urllib.request.urlopen", raise_err)
+    assert fetch_remote_main_sha() is None
+
+
+def test_auto_update_if_needed_git_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from azp.updater import auto_update_if_needed
+
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr("azp.updater.shutil.which", lambda _name: "git")
+
+    # 1. Lokalne zmiany -> (False, ...) bez pulla
+    calls_dirty: list[list[str]] = []
+
+    def run_dirty(cmd: list[str], **_kw: object) -> subprocess.CompletedProcess[str]:
+        calls_dirty.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout=" M azp/main.py\n", stderr="")
+
+    monkeypatch.setattr("azp.updater.subprocess.run", run_dirty)
+    changed, _msg = auto_update_if_needed(project_root=tmp_path)
+    assert changed is False
+    assert calls_dirty == [["git", "status", "--porcelain", "--untracked-files=no"]]
+
+    # 2. old_sha == new_sha -> (False, ...)
+    head_sha = "1" * 40
+
+    def run_up_to_date(cmd: list[str], **_kw: object) -> subprocess.CompletedProcess[str]:
+        if cmd[:2] == ["git", "rev-parse"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout=head_sha + "\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("azp.updater.subprocess.run", run_up_to_date)
+    changed_same, msg_same = auto_update_if_needed(project_root=tmp_path)
+    assert changed_same is False
+    assert "aktualna" in msg_same.lower()
+
+    # 3. old_sha != new_sha -> (True, ...)
+    new_sha = "2" * 40
+    rev_calls = 0
+
+    def run_updated(cmd: list[str], **_kw: object) -> subprocess.CompletedProcess[str]:
+        nonlocal rev_calls
+        if cmd[:2] == ["git", "rev-parse"]:
+            rev_calls += 1
+            sha = head_sha if rev_calls == 1 else new_sha
+            return subprocess.CompletedProcess(cmd, 0, stdout=sha + "\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("azp.updater.subprocess.run", run_updated)
+    changed_new, msg_new = auto_update_if_needed(project_root=tmp_path)
+    assert changed_new is True
+    assert "git pull" in msg_new.lower()
+
+
+def test_auto_update_if_needed_zip_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from azp.updater import PRESERVED_RELATIVE_PATHS, auto_update_if_needed
+
+    assert ".azp_version" in PRESERVED_RELATIVE_PATHS
+    sha_v1 = "a" * 40
+    sha_v2 = "b" * 40
+
+    # 1. .azp_version == remote_sha -> brak pobierania ZIP-a, (False, ...)
+    (tmp_path / ".azp_version").write_text(sha_v1, encoding="utf-8")
+    monkeypatch.setattr("azp.updater.fetch_remote_main_sha", lambda **_kw: sha_v1)
+
+    def fail_if_called(*_args: object, **_kw: object) -> object:
+        raise AssertionError("ZIP nie powinien być pobierany przy zgodnym .azp_version")
+
+    monkeypatch.setattr("urllib.request.urlopen", fail_if_called)
+    changed_cached, _ = auto_update_if_needed(project_root=tmp_path)
+    assert changed_cached is False
+
+    # 2. Nowy SHA i zmiana pliku na dysku -> aktualizuje plik, zapisuje .azp_version, (True, ...)
+    class _ZipResp:
+        def __init__(self, data: bytes) -> None:
+            self._data = data
+
+        def read(self) -> bytes:
+            return self._data
+
+        def __enter__(self) -> _ZipResp:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    target_file = tmp_path / "azp" / "mod.py"
+    target_file.parent.mkdir(parents=True, exist_ok=True)
+    target_file.write_text("VER = 1\n", encoding="utf-8")
+
+    zip_v2 = _build_zip_bytes({"zotero-ppt-assistant-main/azp/mod.py": b"VER = 2\n"})
+    monkeypatch.setattr("azp.updater.fetch_remote_main_sha", lambda **_kw: sha_v2)
+    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kw: _ZipResp(zip_v2))
+
+    changed_v2, msg_v2 = auto_update_if_needed(project_root=tmp_path)
+    assert changed_v2 is True
+    assert "1" in msg_v2
+    assert target_file.read_text(encoding="utf-8") == "VER = 2\n"
+    assert (tmp_path / ".azp_version").read_text(encoding="utf-8").strip() == sha_v2
+
+    # 3. Nowy SHA, ale pliki identyczne z dyskiem -> zapisuje nowy .azp_version, (False, ...)
+    sha_v3 = "c" * 40
+    monkeypatch.setattr("azp.updater.fetch_remote_main_sha", lambda **_kw: sha_v3)
+    changed_same_bytes, _ = auto_update_if_needed(project_root=tmp_path)
+    assert changed_same_bytes is False
+    assert (tmp_path / ".azp_version").read_text(encoding="utf-8").strip() == sha_v3
+
+
+def test_background_auto_update_and_reload_window(
+    tk_root: tk.Tk, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from azp.main import main, reload_window_after_update, start_background_auto_update
+
+    # 1. update_fn zwraca (False, ...) -> brak przeładowania, okienko pozostaje otwarte
+    win_no_change = AzpWindow(
+        zotero=FakeZoteroSource(),
+        slide_doc=FakeSlideDoc(),
+        master=tk_root,
+        poll_interval_ms=None,
+    )
+    try:
+        reloaded: list[str] = []
+        thread = start_background_auto_update(
+            win_no_change,
+            update_fn=lambda: (False, "Wersja jest aktualna."),
+            addin_fn=lambda: reloaded.append("addin"),
+            reload_fn=lambda _w, msg: (reloaded.append(msg), True)[1],
+        )
+        thread.join(timeout=2.0)
+        time.sleep(0.03)
+        win_no_change.root.update()
+        assert reloaded == []
+        assert win_no_change.root.winfo_exists()
+    finally:
+        win_no_change.destroy()
+
+    # 2. update_fn zwraca (True, "Nowa wersja") -> odświeża dodatek, wywołuje popen z --no-auto-update i zamyka okienko
+    win_update = AzpWindow(
+        zotero=FakeZoteroSource(),
+        slide_doc=FakeSlideDoc(),
+        master=tk_root,
+        poll_interval_ms=None,
+    )
+    events: list[object] = []
+
+    def fake_popen(cmd: list[str], **_kw: object) -> object:
+        events.append(("popen", cmd))
+        return object()
+
+    thread_up = start_background_auto_update(
+        win_update,
+        update_fn=lambda: (True, "Nowa wersja"),
+        addin_fn=lambda: (events.append("addin"), tmp_path / "AsystentZotero.ppam")[1],
+        reload_fn=lambda w, msg: reload_window_after_update(w, msg, popen_fn=fake_popen),
+    )
+    thread_up.join(timeout=2.0)
+    deadline = time.monotonic() + 1.0
+    while win_update.root.winfo_exists() and time.monotonic() < deadline:
+        win_update.root.update()
+        time.sleep(0.01)
+    assert events[0] == "addin"
+    assert events[1][0] == "popen"
+    assert "--no-auto-update" in events[1][1]
+    assert not win_update.root.winfo_exists()
+
+    # 3. Gdy popen_fn rzuca OSError -> okienko zostaje widoczne, pasek stanu informuje o restarcie
+    win_err = AzpWindow(
+        zotero=FakeZoteroSource(),
+        slide_doc=FakeSlideDoc(),
+        master=tk_root,
+        poll_interval_ms=None,
+    )
+    try:
+        def failing_popen(*_args: object, **_kw: object) -> object:
+            raise OSError("cannot spawn")
+
+        ok_reload = reload_window_after_update(win_err, "Nowa wersja", popen_fn=failing_popen)
+        assert ok_reload is False
+        assert win_err.root.winfo_exists()
+        assert "uruchom okienko ponownie" in win_err.get_status_message().lower()
+    finally:
+        win_err.destroy()
+
+    # 4. Flaga --no-auto-update w main() pomija focus_existing_azp_window i start_background_auto_update
+    skipped: list[str] = []
+
+    class _FakeWin:
+        def run(self) -> None:
+            skipped.append("run")
+
+    monkeypatch.setattr(
+        "azp.main.focus_existing_azp_window",
+        lambda: (skipped.append("focus"), True)[1],
+    )
+    monkeypatch.setattr("azp.main.is_powerpoint_addin_installed", lambda: True)
+    monkeypatch.setattr("azp.main.build_window", lambda: _FakeWin())
+    monkeypatch.setattr(
+        "azp.main.start_background_auto_update",
+        lambda _w: skipped.append("auto_update"),
+    )
+    assert main(["--no-auto-update"]) == 0
+    assert skipped == ["run"]
