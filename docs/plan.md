@@ -15,8 +15,8 @@ Po każdym etapie (także w ciągu): testy → przegląd → commit → wpis w p
 | Etap | Rodzaj | Wykonawca | Przegląd | Szacunek | Gotowe, gdy |
 |---|---|---|---|---|---|
 | B1.1 Klient Zotero | kod | subagent `flash` | high | 30–45 min | wyszukiwanie po autorze/tytule/roku; cytowanie i opis dla v4 i APA; lista stylów; HTML → przebiegi tekstu z kursywą; komunikat „Zotero nie odpowiada” |
-| B1.2 Okienko | kod | subagent `flash` | high | 45–60 min | wyszukiwarka, wyniki, *Cytuj*, *Odśwież / Przenumeruj*; listy: styl, tryb numeracji, czcionka (z systemu), rozmiar; „zawsze na wierzchu”; działa z atrapą `SlideDoc` |
-| B2.1 Warstwa PowerPoint | kod | subagent `inherit` (Opus 5.5) | **xhigh** | 1–1,5 h | aktywny slajd i kursor; wstawienie cytowania; pole „Źródła” na dole slajdu (czcionka, rozmiar, kursywa, autodopasowanie); tagi; testy COM na prezentacji testowej |
+| B1.2 Okienko | kod | subagent `flash` | high | 45–60 min | wyszukiwarka, wyniki, *Cytuj*, *Odśwież / Przenumeruj*; listy: styl, tryb numeracji, czcionka (z systemu), rozmiar, położenie pola źródeł (D9: 3 warianty), nagłówek „Źródła:” tak/nie; „zawsze na wierzchu”; bez kursora – tylko prośba o kursor (D10); działa z atrapą `SlideDoc` |
+| B2.1 Warstwa PowerPoint | kod | subagent `inherit` (Opus 5.5) | **xhigh** | 1–1,5 h | aktywny slajd i kursor; wstawienie cytowania; pole źródeł w jednym z 3 położeń (D9), z nagłówkiem albo bez (czcionka, rozmiar, kursywa, autodopasowanie); brak kursora → żadnej zmiany w prezentacji (D10); tagi; testy COM na prezentacji testowej |
 | B2.2 Silnik numeracji i stylów | kod | subagent `inherit` (Opus 5.5) | **xhigh** | 1–1,5 h | IEEE globalnie / per slajd, ten sam numer dla powtórzeń, `[1, 2]`; APA autor-rok, alfabetycznie; przebudowa po zmianie stylu; kopia zapasowa przed przebudową; czyste funkcje z testami |
 
 Tor B1 = B1.1 → B1.2; tor B2 = B2.1 → B2.2; tory równolegle, rozłączne katalogi (`azp/zotero`, `azp/gui` | `azp/ppt`, `azp/engine`).

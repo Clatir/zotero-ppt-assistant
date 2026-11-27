@@ -10,3 +10,6 @@
 | D6 | 2026-11-27 | Bez slajdu „Bibliografia” na końcu. |
 | D7 | 2026-11-27 | Prace pogrupowane w ciągi, części niezależne równolegle. |
 | D8 | 2026-11-27 | Zasady pracy według `Clatir/RegulatedDay` (Zasady współpracy, skill `etap`), jak najdokładniej. |
+| D9 | 2026-11-27 | Położenie pola źródeł wybierane w okienku: (a) dół slajdu, cała szerokość, nad stopką PowerPointa; (b) lewy dolny róg, węższe; (c) w miejscu stopki PowerPointa. Do wyboru też: z nagłówkiem „Źródła:” albo same źródła bez nagłówka. |
+| D10 | 2026-11-27 | „Cytuj” bez kursora w polu tekstowym: nic nie zmieniać, tylko poprosić o ustawienie kursora. |
+| D11 | 2026-11-27 | Kod tylko lokalnie (git na tym komputerze), bez GitHuba. |
