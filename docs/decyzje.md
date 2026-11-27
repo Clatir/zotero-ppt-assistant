@@ -14,3 +14,5 @@
 | D10 | 2026-11-27 | „Cytuj” bez kursora w polu tekstowym: nic nie zmieniać, tylko poprosić o ustawienie kursora. |
 | D11 | 2026-11-27 | Kod tylko lokalnie (git na tym komputerze), bez GitHuba. *(zastąpione przez D12)* |
 | D12 | 2026-11-27 | Publiczne repozytorium na GitHubie (`Clatir/zotero-ppt-assistant`), commity wypychane na bieżąco; bez danych użytkownika i osobistych treści (zastępuje D11). |
+| D13 | 2026-11-27 | Cytowania zbiorcze (np. `[1, 2]` lub `(Kowalski, 2023; Nowak, 2024)`): obsługiwany zarówno wielokrotny wybór na liście wyników w okienku (Ctrl/Shift), jak i automatyczne scalanie, gdy kursor przy wstawianiu stoi tuż przy istniejącym cytowaniu. |
+| D14 | 2026-11-27 | Zmiana stylu, trybu numeracji, czcionki, rozmiaru lub położenia stopki na liście wyboru w okienku od razu przebudowuje całą prezentację (po automatycznym utworzeniu kopii zapasowej `.bak.pptx`). |

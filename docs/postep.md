@@ -3,7 +3,8 @@
 ## Stan
 - **Zakończony ciąg:** Ciąg A – Fundament (etapy A1 i A2 ukończone, przegląd kodu zatwierdzony, commity na GitHubie).
 - **Brama A→B:** kontrakty (`azp/contracts.py`) i atrapy (`tests/fakes/`) gotowe i przetestowane (`12 passed` bez COM + `1 passed` COM).
-- **Następny krok:** „Przed ciągiem B” – czeka na odpowiedzi użytkownika i „dalej”.
+- **Przed ciągiem B:** pytania rozstrzygnięte i zapisane jako D13–D14.
+- **Następny krok:** Ciąg B (dwa tory równolegle: B1.1→B1.2 oraz B2.1→B2.2) po słowie „dalej”.
 
 ## Kolejka
 | Ciąg | Stan |
