@@ -1,0 +1,1 @@
+"""Pływające okienko GUI (tkinter)."""

@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+~$*.pptx
+*.bak.pptx
+*.tmp.pptx
+tests/data/*.pptx

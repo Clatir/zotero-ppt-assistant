@@ -8,3 +8,4 @@
 | T4 | Kursywa i inne znaczniki z HTML-a CSL przenoszone do formatowania tekstu stopki. | Zgodność wyglądu z Wordem. |
 | T5 | Wykonawcy w Antigravity: subagenci (`inherit` = Opus 5.5 do zadań xhigh, `flash` do prostych). Odpowiednik `wykonawca-opus` / `wykonawca-haiku` z RD. | Brak plików `.claude/agents` w Antigravity. |
 | T6 | Odpowiednik `/code-review`: subagent-recenzent z poziomem ryzyka w poleceniu; `/clear` → `/compact` albo nowa rozmowa. | Brak tych komend w Antigravity. |
+| T7 | Przeniesienie lokalnego katalogu repozytorium ze `scratch` do aktywnego workspace'u `c:\Agrvt-Projekty\PP`; `pytest.ini` domyślnie pomija `-m com`; w testach COM używamy `DispatchEx` i blokady przy uruchomionym `POWERPNT.EXE`. | Zgodność z aktywnym folderem roboczym IDE i ochrona otwartych prezentacji użytkownika. |
