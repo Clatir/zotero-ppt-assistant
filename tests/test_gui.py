@@ -64,7 +64,8 @@ def test_search_displays_results_and_filters_on_query_and_return_key(tk_root: tk
         assert win.get_result_items()[0].key == "NOWAK2024"
 
         win.set_search_query("2013")
-        win.search_entry.focus_set()
+        win.root.update()
+        win.search_entry.focus_force()
         win.root.update()
         win.search_entry.event_generate("<Return>")
         win.root.update()

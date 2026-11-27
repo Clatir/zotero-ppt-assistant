@@ -11,3 +11,4 @@ dist/
 *.bak.pptx
 *.tmp.pptx
 tests/data/*.pptx
+config.json

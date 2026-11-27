@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import tkinter as tk
+from pathlib import Path
 
+from azp.config import DEFAULT_CONFIG_PATH
 from azp.contracts import AzpError, Settings, SlideDoc, ZoteroSource
 from azp.engine import CitationEngine
 from azp.gui import AzpWindow
@@ -33,6 +35,7 @@ def build_window(
     master: tk.Misc | None = None,
     initial_search: bool = True,
     poll_interval_ms: int | None = 500,
+    config_path: Path | None = DEFAULT_CONFIG_PATH,
 ) -> AzpWindow:
     """Tworzy okienko `AzpWindow` połączone z `ZoteroClient`, `PowerPointSlideDoc` i `CitationEngine`."""
     zot: ZoteroSource = zotero if zotero is not None else ZoteroClient()
@@ -75,6 +78,7 @@ def build_window(
         on_rebuild=_on_rebuild,
         initial_search=initial_search,
         poll_interval_ms=poll_interval_ms,
+        config_path=config_path,
     )
 
 

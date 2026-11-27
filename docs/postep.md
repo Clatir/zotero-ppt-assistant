@@ -1,21 +1,27 @@
 # Postęp
 
 ## Stan
-- **Zakończone ciągi:**
+- **Zakończone ciągi / etapy:**
   - **Ciąg A – Fundament** (A1, A2).
-  - **Ciąg B – Rdzeń** (Tor B1: **B1.1 Klient Zotero**, **B1.2 Okienko**; Tor B2: **B2.1 Warstwa PowerPoint**, **B2.2 Silnik numeracji i stylów** – wszystkie 4 etapy po przeglądach kodu `high`/`xhigh`, commity wypchnięte na GitHuba).
-- **Pełny zestaw testów po C1:** `107 passed` bez COM + `3 passed` COM (`-m com`).
-- **Przed ciągiem C:** pytania rozstrzygnięte i zapisane jako D15–D20.
-- **Następny krok:** **Etap C2 Dodatki** (w ramach Ciągu C), a następnie pauza przed `C3 Odbiór na Twojej prezentacji`.
+  - **Ciąg B – Rdzeń** (Tor B1: **B1.1 Klient Zotero**, **B1.2 Okienko**; Tor B2: **B2.1 Warstwa PowerPoint**, **B2.2 Silnik numeracji i stylów**).
+  - **Ciąg C – Integracja i odbiór:** etapy kodowe **C1 Integracja** (`xhigh`) oraz **C2 Dodatki** (`high`) zakończone, po przeglądach kodu, commity wypchnięte na GitHuba.
+- **Pełny zestaw testów po C2:** `133 passed` bez COM + `3 passed` COM (`-m com`).
+- **Następny krok:** **Etap C3 Odbiór na Twojej prezentacji** (wspólny odbiór na żywo według listy w `docs/odbior.md`) po słowie „dalej”.
 
 ## Kolejka
 | Ciąg | Stan |
 |---|---|
 | A – Fundament | gotowe (A1, A2) |
 | B – Rdzeń (tory B1 i B2 równolegle) | gotowe (B1.1, B1.2, B2.1, B2.2) |
-| C – Integracja i odbiór | w toku: C1 gotowe → C2 Dodatki → pauza przed C3 |
+| C – Integracja i odbiór | C1 i C2 gotowe; czeka na „dalej” do C3 (Odbiór na Twojej prezentacji) |
 
 ## Zrealizowane etapy
+
+### C2 Dodatki (2026-11-27)
+- **Zakres:** `azp/config.py` (`DEFAULT_CONFIG_PATH`, `load_config`, `save_config` – zapis i odczyt domyślnych ustawień w `config.json` z bezpiecznym powrotem do `Settings()` przy braku pliku lub uszkodzonym JSON-ie), `.gitignore` (`config.json`), `azp/contracts.py` (ścisła walidacja typów w `Settings.__post_init__` i `Settings.from_dict` – M1), `azp/gui/app.py` i `azp/main.py` (integracja `config_path`, skróty klawiszowe wewnątrz okienka D15: `Enter` / `Ctrl+Enter` = *Cytuj*, `F5` / `Ctrl+R` = *Odśwież / Przenumeruj*, `Ctrl+F` = fokus i zaznaczenie pola *Szukaj*), `start_azp.pyw` i `start_azp.bat` (uruchamianie ikoną bez czarnej konsoli w tle D16), `tests/test_c2_extras.py` (26 przypadków testowych, w tym poprawki H1 i M1 z 1. rundy przeglądu `high`).
+- **Decyzje:** realizacja D15, D16 (oraz D14, D18, D19).
+- **Testy:** `pytest -q tests/test_c2_extras.py` (`26 passed`), pełny zestaw `pytest -q` (`133 passed`).
+- **Czas faktyczny:** ~12 min (szacunek: 20–30 min).
 
 ### C1 Integracja (2026-11-27)
 - **Zakres:** `azp/main.py`, `azp/__main__.py` (`build_window`, `describe_error`, `main` – połączenie `AzpWindow`, `CitationEngine`, `ZoteroClient` i `PowerPointSlideDoc`, powrót fokusu do PowerPointa po *Cytuj* D20, konwersja nieoczekiwanych błędów COM na komunikaty paska stanu), `azp/ppt/com_doc.py` (`TextEdit`, `plan_citation_insert`, `plan_citation_replacements`, `_apply_text_edit_to_text_range` – edycje wyłącznie na podzakresach `Characters(start, len)` bez utraty formatowania slajdu T10, korekta pozycji kursora po `update_slide_citations` H2/M2, kopia zapasowa przez `SaveCopyAs` bez zapisu oryginału D17, `get_presentation_key` D19, `choose_powerpoint_window` i `focus_presentation_window` z odfiltrowaniem własnego okna AZP D20/H1), `azp/engine/service.py` i `azp/gui/app.py` (blokada przebudowy niezapisanej prezentacji z komunikatem `MSG_SAVE_BEFORE_REBUILD` i wycofaniem wyboru D18, śledzenie aktywnej prezentacji `sync_with_active_presentation` / `check_active_presentation` D19/M1), `tests/conftest.py`, `tests/fakes/fake_com.py`, `tests/test_main.py` oraz nowe testy w `tests/test_ppt.py`, `tests/test_engine.py`, `tests/test_gui.py` (łącznie 23 nowe testy jednostkowe + kompleksowy test końcowy COM `@pytest.mark.com` okienko + żywe Zotero 10 + żywy PowerPoint, po 3 rundach przeglądu `xhigh`).
@@ -61,7 +67,6 @@
 
 ## Uwagi na później
 - `low`/`nit` (A1, `tests/test_smoke_env.py`): plik `tests/data/test_smoke.pptx` jest usuwany przed startem testu i zostaje po teście w ignorowanym katalogu `tests/data/` do ewentualnego podglądu.
-- `low`/`nit` (A2, `azp/contracts.py:183`): w Pythonie `bool` dziedziczy po `int`, więc można opcjonalnie odrzucać `isinstance(font_size_pt, bool)` w walidacji `Settings`.
 - `low`/`nit` (B1.1, `tests/test_zotero.py:517`): test integracyjny z żywym Zotero zakłada, że pierwsza pozycja z `/items/top` posiada element formatowany kursywą w stylu IEEE v4.
 - `low`/`nit` (C1, `azp/gui/app.py:500`, `azp/ppt/com_doc.py:726`): wywołanie `save_settings` przy `rebuild=False` oraz odczyt `pres.Slides.Count` na początku `_resolve_cursor_context()` można dodatkowo opakować w `try...except Exception:`.
 - `low`/`nit` (C1, `azp/ppt/com_doc.py:571`): `deserialize_settings` może dodatkowo łapać `(ValueError, TypeError)` na wypadek ręcznie uszkodzonego tagu `AZP_SETTINGS`.

@@ -10,6 +10,7 @@ from tkinter import font as tkfont
 from tkinter import ttk
 from typing import Callable, Sequence
 
+from azp.config import load_config, save_config
 from azp.contracts import (
     MSG_SAVE_BEFORE_REBUILD,
     STYLE_APA,
@@ -179,19 +180,26 @@ class AzpController:
         settings: Settings | None = None,
         on_cite: CiteCallback | None = None,
         on_rebuild: RebuildCallback | None = None,
+        config_path: Path | None = None,
     ) -> None:
         self.zotero = zotero
         self.slide_doc = slide_doc
         self.on_cite = on_cite
         self.on_rebuild = on_rebuild
+        self.config_path = config_path
 
         if settings is not None:
             self.settings = settings
-        elif slide_doc.has_open_presentation():
-            loaded = slide_doc.load_settings()
-            self.settings = loaded if loaded is not None else Settings()
         else:
-            self.settings = Settings()
+            base_settings = load_config(config_path) if config_path is not None else Settings()
+            loaded = slide_doc.load_settings() if slide_doc.has_open_presentation() else None
+            if loaded is not None:
+                if config_path is not None:
+                    self.settings = replace(loaded, always_on_top=base_settings.always_on_top)
+                else:
+                    self.settings = loaded
+            else:
+                self.settings = base_settings
 
         self.results: list[ZoteroItem] = []
         self.last_query: str = ""
@@ -489,6 +497,14 @@ class AzpController:
             self.status_message = "Przebudowano prezentację."
         return True
 
+    def _save_config_safe(self) -> None:
+        if self.config_path is None:
+            return
+        try:
+            save_config(self.settings, self.config_path)
+        except OSError:
+            pass
+
     def update_settings(self, rebuild: bool = True, **changes: object) -> bool:
         """Aktualizuje ustawienia i przy zmianie opcji formatowania przebudowuje prezentację (D14)."""
         self.sync_with_active_presentation()
@@ -501,9 +517,11 @@ class AzpController:
         if not rebuild:
             if self.slide_doc.has_open_presentation():
                 self.slide_doc.save_settings(self.settings)
+            self._save_config_safe()
             return True
 
         if not self.slide_doc.has_open_presentation():
+            self._save_config_safe()
             self.status_message = "Zapisano ustawienie (brak otwartej prezentacji)."
             return False
 
@@ -511,6 +529,7 @@ class AzpController:
             # Wycofaj zmianę, jeśli przebudowa nie powiodła się (np. Zotero offline)
             self.settings = previous_settings
             return False
+        self._save_config_safe()
         return True
 
 
@@ -527,6 +546,7 @@ class AzpWindow:
         on_rebuild: RebuildCallback | None = None,
         initial_search: bool = True,
         poll_interval_ms: int | None = 500,
+        config_path: Path | None = None,
     ) -> None:
         self.controller = AzpController(
             zotero=zotero,
@@ -534,6 +554,7 @@ class AzpWindow:
             settings=settings,
             on_cite=on_cite,
             on_rebuild=on_rebuild,
+            config_path=config_path,
         )
 
         self.root: tk.Tk | tk.Toplevel
@@ -589,6 +610,7 @@ class AzpWindow:
         self.search_entry = ttk.Entry(search_frame, textvariable=self.query_var)
         self.search_entry.grid(row=0, column=0, sticky="ew", padx=(0, 6))
         self.search_entry.bind("<Return>", self._on_search_event)
+        self.search_entry.bind("<Control-Return>", self._on_cite_shortcut)
 
         self.search_button = ttk.Button(
             search_frame, text="Szukaj", command=self.perform_search
@@ -611,6 +633,8 @@ class AzpWindow:
             height=9,
         )
         self.results_listbox.grid(row=0, column=0, sticky="nsew")
+        self.results_listbox.bind("<Return>", self._on_cite_shortcut)
+        self.results_listbox.bind("<Control-Return>", self._on_cite_shortcut)
 
         scrollbar = ttk.Scrollbar(
             results_frame, orient=tk.VERTICAL, command=self.results_listbox.yview
@@ -731,6 +755,16 @@ class AzpWindow:
             wraplength=390,
         )
         self.status_label.grid(row=5, column=0, sticky="ew")
+        self._bind_shortcuts()
+
+    def _bind_shortcuts(self) -> None:
+        """Rejestruje skróty klawiszowe wewnątrz okienka (D15)."""
+        self.root.bind("<Control-Return>", self._on_cite_shortcut)
+        self.root.bind("<F5>", self._on_refresh_shortcut)
+        self.root.bind("<Control-r>", self._on_refresh_shortcut)
+        self.root.bind("<Control-R>", self._on_refresh_shortcut)
+        self.root.bind("<Control-f>", self._on_focus_search_shortcut)
+        self.root.bind("<Control-F>", self._on_focus_search_shortcut)
 
     def _add_setting_row(
         self,
@@ -808,6 +842,18 @@ class AzpWindow:
     def _on_search_event(self, _event: tk.Event[ttk.Entry]) -> None:
         self.perform_search()
 
+    def _on_cite_shortcut(self, _event: tk.Event[tk.Misc]) -> str:
+        self.cite_selected()
+        return "break"
+
+    def _on_refresh_shortcut(self, _event: tk.Event[tk.Misc]) -> str:
+        self.refresh_presentation()
+        return "break"
+
+    def _on_focus_search_shortcut(self, _event: tk.Event[tk.Misc]) -> str:
+        self.focus_search_entry()
+        return "break"
+
     def _on_style_selected(self, _event: tk.Event[ttk.Combobox]) -> None:
         title = self.style_var.get()
         style_id = self._style_title_to_id[title]
@@ -850,6 +896,12 @@ class AzpWindow:
         return ok
 
     # --- Publiczne API okienka (dla UI, skrótów oraz testów) ---
+
+    def focus_search_entry(self) -> None:
+        """Ustawia fokus na polu wyszukiwania i zaznacza cały wpisany tekst (D15)."""
+        self.search_entry.focus_set()
+        self.search_entry.selection_range(0, tk.END)
+        self.search_entry.icursor(tk.END)
 
     def set_search_query(self, query: str) -> None:
         """Ustawia tekst zapytania w polu wyszukiwania."""

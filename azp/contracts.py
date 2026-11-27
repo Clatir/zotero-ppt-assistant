@@ -187,12 +187,21 @@ class Settings:
             raise ValueError(f"Nieprawidłowy tryb numeracji: {self.numbering_mode!r}")
         if self.footer_position not in VALID_FOOTER_POSITIONS:
             raise ValueError(f"Nieprawidłowe położenie stopki: {self.footer_position!r}")
-        if self.font_size_pt < 6 or self.font_size_pt > 72:
-            raise ValueError(f"Rozmiar czcionki poza zakresem 6..72 pt: {self.font_size_pt}")
-        if not self.font_name.strip():
+        if (
+            not isinstance(self.font_size_pt, int)
+            or isinstance(self.font_size_pt, bool)
+            or self.font_size_pt < 6
+            or self.font_size_pt > 72
+        ):
+            raise ValueError(f"Rozmiar czcionki poza zakresem 6..72 pt: {self.font_size_pt!r}")
+        if not isinstance(self.font_name, str) or not self.font_name.strip():
             raise ValueError("Nazwa czcionki nie może być pusta.")
-        if not self.style_id.strip():
+        if not isinstance(self.style_id, str) or not self.style_id.strip():
             raise ValueError("Identyfikator stylu nie może być pusty.")
+        if not isinstance(self.footer_header, bool):
+            raise ValueError(f"Nieprawidłowa wartość footer_header: {self.footer_header!r}")
+        if not isinstance(self.always_on_top, bool):
+            raise ValueError(f"Nieprawidłowa wartość always_on_top: {self.always_on_top!r}")
 
     def to_dict(self) -> dict[str, Any]:
         """Serializuje ustawienia do słownika (do zapisu w Tags lub config.json)."""
@@ -211,13 +220,13 @@ class Settings:
         """Odtwarza `Settings` ze słownika z zachowaniem wartości domyślnych."""
         defaults = cls()
         return cls(
-            style_id=str(data.get("style_id", defaults.style_id)),
+            style_id=data.get("style_id", defaults.style_id),
             numbering_mode=data.get("numbering_mode", defaults.numbering_mode),
-            font_name=str(data.get("font_name", defaults.font_name)),
-            font_size_pt=int(data.get("font_size_pt", defaults.font_size_pt)),
+            font_name=data.get("font_name", defaults.font_name),
+            font_size_pt=data.get("font_size_pt", defaults.font_size_pt),
             footer_position=data.get("footer_position", defaults.footer_position),
-            footer_header=bool(data.get("footer_header", defaults.footer_header)),
-            always_on_top=bool(data.get("always_on_top", defaults.always_on_top)),
+            footer_header=data.get("footer_header", defaults.footer_header),
+            always_on_top=data.get("always_on_top", defaults.always_on_top),
         )
 
 

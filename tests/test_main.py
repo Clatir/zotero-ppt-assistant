@@ -35,7 +35,11 @@ def test_main_module_is_runnable_with_python_m_azp() -> None:
 def test_build_window_wires_engine_and_returns_focus_after_cite_d20(tk_root: tk.Tk) -> None:
     doc = _FocusRecordingDoc()
     win = build_window(
-        zotero=FakeZoteroSource(), slide_doc=doc, master=tk_root, poll_interval_ms=None
+        zotero=FakeZoteroSource(),
+        slide_doc=doc,
+        master=tk_root,
+        poll_interval_ms=None,
+        config_path=None,
     )
     try:
         win.select_result_keys(["KOWAL2023", "NOWAK2024"])
@@ -62,7 +66,11 @@ def test_build_window_turns_unexpected_powerpoint_errors_into_status(tk_root: tk
     """Błąd COM (np. PowerPoint zajęty) nie wysypuje okienka – komunikat w pasku stanu."""
     doc = _FocusRecordingDoc()
     win = build_window(
-        zotero=FakeZoteroSource(), slide_doc=doc, master=tk_root, poll_interval_ms=None
+        zotero=FakeZoteroSource(),
+        slide_doc=doc,
+        master=tk_root,
+        poll_interval_ms=None,
+        config_path=None,
     )
     try:
         doc.fail_insert_with = RuntimeError("Call was rejected by callee.")
@@ -169,6 +177,7 @@ def test_c1_window_drives_real_powerpoint_and_real_zotero_e2e(tk_root: tk.Tk) ->
             slide_doc=doc,
             master=tk_root,
             poll_interval_ms=None,
+            config_path=None,
         )
 
         items = win.get_result_items()
