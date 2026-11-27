@@ -16,8 +16,13 @@ Nie przechodzi, gdy.
   - *Jak sprawdzić:* uruchom `python -m pytest -q tests/test_contracts.py`.
   - *Oczekiwany efekt:* 11 testów przechodzi (`11 passed`); walidacja `Settings` (D2–D5, D9), blokada cytowania bez kursora (D10), zachowanie kursywy w `TextSpan`/`FooterEntry` (T4, T8) oraz dwuprzebiegowa podmiana numerów cytowań działają poprawnie.
   - *Nie przechodzi, gdy:* którykolwiek z 11 testów kontraktów zgłasza błąd.
+- **B1.1 Klient lokalnego API Zotero i parser HTML CSL** – **Automatycznie:** `tests/test_zotero.py` (25 testów)
+  - *Jak sprawdzić:* przy włączonym Zotero 10 uruchom `python -m pytest -q tests/test_zotero.py`.
+  - *Oczekiwany efekt:* 25 testów przechodzi (`25 passed`); wyszukiwanie po autorze/tytule/roku, formatowanie cytowań i opisów dla IEEE v4 oraz APA 7, konwersja HTML CSL na przebiegi `TextSpan` z kursywą bez wiodącego `[1]` (T4, T8) oraz komunikat „Zotero nie odpowiada” przy wyłączonym API działają poprawnie.
+  - *Nie przechodzi, gdy:* którykolwiek z 25 testów w `tests/test_zotero.py` zgłasza błąd.
 
 ## Wszystkie punkty
 - A1.1 Odpowiedź lokalnego API Zotero dla stylów IEEE v4 i APA
 - A1.2 Sterowanie PowerPointem przez COM i trwałość Tags
 - A2.1 Zgodność kontraktów `ZoteroSource` i `SlideDoc` oraz atrap testowych
+- B1.1 Klient lokalnego API Zotero i parser HTML CSL
