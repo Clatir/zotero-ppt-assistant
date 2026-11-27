@@ -28,6 +28,10 @@ Nie przechodzi, gdy.
   - *Jak sprawdzić:* uruchom `python -m pytest -q tests/test_gui.py`.
   - *Oczekiwany efekt:* 16 testów przechodzi (`16 passed`); wyszukiwarka, wielokrotny wybór wyników (Ctrl/Shift – D13), blokada *Cytuj* bez kursora w polu tekstowym (D10), lista czcionek z systemu (D5), 3 położenia pola źródeł i przełącznik nagłówka „Źródła:” (D9), natychmiastowa przebudowa prezentacji z kopią zapasową `.bak.pptx` po zmianie ustawień (D14) wraz z wycofaniem wyboru przy błędzie Zotero oraz opcja „Zawsze na wierzchu” działają poprawnie.
   - *Nie przechodzi, gdy:* którykolwiek z 16 testów w `tests/test_gui.py` zgłasza błąd.
+- **B2.2 Silnik numeracji i stylów (`azp.engine`)** – **Automatycznie:** `tests/test_engine.py` (20 testów czystych funkcji i `CitationEngine`)
+  - *Jak sprawdzić:* uruchom `python -m pytest -q tests/test_engine.py`.
+  - *Oczekiwany efekt:* 20 testów przechodzi (`20 passed`); numeracja IEEE globalnie i per slajd (D4), ten sam numer dla powtórzeń, cytowania zbiorcze i automatyczne scalanie sąsiednich cytowań przy kursorze (`[1, 2]` oraz `(Autor1; Autor2)` – D13), alfabetyczne sortowanie stopki w stylu APA 7 (D3), blokada bez kursora (D10) oraz natychmiastowa przebudowa z kopią zapasową `.bak.pptx` po zmianie ustawień lub kolejności slajdów (D14) działają poprawnie.
+  - *Nie przechodzi, gdy:* którykolwiek z 20 testów w `tests/test_engine.py` zgłasza błąd.
 
 ## Wszystkie punkty
 - A1.1 Odpowiedź lokalnego API Zotero dla stylów IEEE v4 i APA
@@ -36,3 +40,4 @@ Nie przechodzi, gdy.
 - B1.1 Klient lokalnego API Zotero i parser HTML CSL
 - B2.1 Warstwa COM PowerPoint (`PowerPointSlideDoc`)
 - B1.2 Okienko GUI (`AzpWindow` / `AzpController`)
+- B2.2 Silnik numeracji i stylów (`azp.engine`)

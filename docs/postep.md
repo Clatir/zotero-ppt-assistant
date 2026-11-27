@@ -1,19 +1,26 @@
 # Postęp
 
 ## Stan
-- **Zakończony ciąg:** Ciąg A – Fundament (A1, A2).
-- **W trakcie:** Ciąg B – Rdzeń:
-  - Tor B1: **ukończony w całości** (**B1.1 Klient Zotero** oraz **B1.2 Okienko** zatwierdzone i wypchnięte na GitHuba).
-  - Tor B2: **B2.1 Warstwa PowerPoint** ukończony; trwa **B2.2 Silnik numeracji i stylów**.
+- **Zakończone ciągi:**
+  - **Ciąg A – Fundament** (A1, A2).
+  - **Ciąg B – Rdzeń** (Tor B1: **B1.1 Klient Zotero**, **B1.2 Okienko**; Tor B2: **B2.1 Warstwa PowerPoint**, **B2.2 Silnik numeracji i stylów** – wszystkie 4 etapy po przeglądach kodu `high`/`xhigh`, commity wypchnięte na GitHuba).
+- **Pełny zestaw testów po Ciągu B:** `84 passed` bez COM + `2 passed` COM (`-m com`).
+- **Następny krok:** **Ciąg C – Integracja i odbiór** (`C1 Integracja` → `C2 Dodatki` → `C3 Odbiór na Twojej prezentacji`) po słowie „dalej”.
 
 ## Kolejka
 | Ciąg | Stan |
 |---|---|
 | A – Fundament | gotowe (A1, A2) |
-| B – Rdzeń (tory B1 i B2 równolegle) | w trakcie (B1.1, B1.2, B2.1 gotowe; trwa B2.2) |
-| C – Integracja i odbiór | – |
+| B – Rdzeń (tory B1 i B2 równolegle) | gotowe (B1.1, B1.2, B2.1, B2.2) |
+| C – Integracja i odbiór | czeka na „dalej” (C1 → C2 → C3) |
 
 ## Zrealizowane etapy
+
+### B2.2 Silnik numeracji i stylów (2026-11-27)
+- **Zakres:** `azp/engine/numbering.py`, `azp/engine/service.py`, `azp/engine/__init__.py` (czyste funkcje `is_numeric_style`, `assign_global_numbers`, `assign_slide_numbers`, `merge_citation_keys`, `format_citation_text`, `build_slide_footer_entries`, `compute_presentation_plan` oraz koordynator `CitationEngine`: numeracja IEEE `global` i `per_slide` D2/D4, ten sam numer dla powtórzeń, scalanie `[1, 2]` i `(Autor1, Rok1; Autor2, Rok2)` D13 wraz z integracją `get_adjacent_citation_at_cursor()`, sortowanie alfabetyczne stopki w APA D3, blokada bez kursora D10, natychmiastowa przebudowa z kopią zapasową `.bak.pptx` po zmianie ustawień D14, adaptery callbacków `make_cite_callback` i `make_rebuild_callback`), `tests/test_engine.py` (20 testów jednostkowych i integracyjnych, w tym 4 poprawki H1, M1–M3 z 1. rundy przeglądu `xhigh`).
+- **Decyzje:** realizacja D2–D6, D9, D10, D13, D14, T4, T8, T9.
+- **Testy:** `pytest -q tests/test_engine.py` (`20 passed in 0.07s`), pełny zestaw `pytest -q` (`84 passed`) + `pytest -q -m com` (`2 passed`).
+- **Czas faktyczny:** ~15 min (szacunek: 1–1,5 h).
 
 ### B1.2 Okienko (2026-11-27)
 - **Zakres:** `azp/gui/app.py`, `azp/gui/__init__.py` (`AzpController`, `AzpWindow` – pływające okienko tkinter po polsku: wyszukiwarka z obsługą `<Return>`, lista wyników z wielokrotnym wyborem Ctrl/Shift D13, przyciski *Cytuj* i *Odśwież / Przenumeruj*, listy wyboru stylu D2/D3, trybu numeracji D4, czcionki z systemu `tkinter.font.families()` i rozmiaru D5, 3 położeń pola źródeł D9, nagłówka „Źródła:” tak/nie D9, natychmiastowa przebudowa z kopią zapasową `.bak.pptx` po zmianie ustawień D14 wraz z wycofaniem wyboru przy błędzie H1, blokada *Cytuj* bez kursora D10, przełącznik „Zawsze na wierzchu”, obsługa `ZoteroOfflineError`), `tests/test_gui.py` (16 testów z atrapami `FakeZoteroSource` i `FakeSlideDoc`, w tym 2 poprawki H1 i M1 z 1. rundy przeglądu `high`).
