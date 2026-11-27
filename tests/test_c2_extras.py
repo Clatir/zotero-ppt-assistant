@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import io
 import json
+import subprocess
 import tkinter as tk
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -382,3 +385,289 @@ def test_install_pp_addin_bat_and_cli_flags(
     assert installed == [True]
     assert main(["--uninstall-addin"]) == 0
     assert uninstalled == [True]
+
+
+# ---------------------------------------------------------------------------
+# 5. Instalator i aktualizator (`azp/updater.py`, `--update`, .bat, README.md)
+# ---------------------------------------------------------------------------
+
+
+def _build_zip_bytes(entries: dict[str, bytes]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for name, data in entries.items():
+            zf.writestr(name, data)
+    return buf.getvalue()
+
+
+def test_extract_github_zip_bytes_extracts_preserves_config_skips_git_and_blocks_zip_slip(
+    tmp_path: Path,
+) -> None:
+    from azp.updater import extract_github_zip_bytes
+
+    existing_cfg = tmp_path / "config.json"
+    existing_cfg.write_text('{"font_size_pt": 18}\n', encoding="utf-8")
+
+    zip_bytes = _build_zip_bytes(
+        {
+            "zotero-ppt-assistant-main/": b"",
+            "zotero-ppt-assistant-main/azp/main.py": b"# updated main\n",
+            "zotero-ppt-assistant-main/README.md": b"# AZP\n",
+            "zotero-ppt-assistant-main/config.json": b'{"font_size_pt": 10}\n',
+            "zotero-ppt-assistant-main/.git/HEAD": b"ref: refs/heads/main\n",
+        }
+    )
+
+    count = extract_github_zip_bytes(zip_bytes, tmp_path)
+    assert count == 2
+    assert (tmp_path / "azp" / "main.py").read_text(encoding="utf-8") == "# updated main\n"
+    assert (tmp_path / "README.md").read_text(encoding="utf-8") == "# AZP\n"
+    assert existing_cfg.read_text(encoding="utf-8") == '{"font_size_pt": 18}\n'
+    assert not (tmp_path / ".git").exists()
+
+    for bad_entry in (
+        "../evil.txt",
+        "zotero-ppt-assistant-main/../../evil.txt",
+        "zotero-ppt-assistant-main/C:evil.txt",
+        "C:evil.txt/foo.txt",
+        "zotero-ppt-assistant-main/sub/..",
+        "zotero-ppt-assistant-main/a/../b.py",
+        "zotero-ppt-assistant-main/plik.txt:stream",
+    ):
+        bad_zip = _build_zip_bytes({bad_entry: b"boom"})
+        with pytest.raises(ValueError):
+            extract_github_zip_bytes(bad_zip, tmp_path)
+
+    # Dwufazowa atomowość: błąd walidacji kolejnego wpisu nie zapisuje wcześniejszego pliku
+    atomic_target = tmp_path / "atomic_dir"
+    atomic_target.mkdir()
+    partial_zip = _build_zip_bytes(
+        {
+            "zotero-ppt-assistant-main/should_not_exist.txt": b"hello",
+            "zotero-ppt-assistant-main/a/../b.py": b"bad",
+        }
+    )
+    with pytest.raises(ValueError):
+        extract_github_zip_bytes(partial_zip, atomic_target)
+    assert not (atomic_target / "should_not_exist.txt").exists()
+
+    # Puste archiwum ZIP -> ValueError
+    with pytest.raises(ValueError):
+        extract_github_zip_bytes(_build_zip_bytes({}), tmp_path)
+
+
+def test_update_from_github_zip_downloads_and_extracts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from azp.updater import update_from_github_zip
+
+    payload = _build_zip_bytes(
+        {
+            "zotero-ppt-assistant-main/azp/new_mod.py": b"VALUE = 1\n",
+        }
+    )
+
+    class _FakeResponse:
+        def __init__(self, data: bytes) -> None:
+            self._data = data
+
+        def read(self) -> bytes:
+            return self._data
+
+        def __enter__(self) -> _FakeResponse:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    seen_urls: list[tuple[str, float]] = []
+
+    def fake_urlopen(url: str, timeout: float = 30.0) -> _FakeResponse:
+        seen_urls.append((url, timeout))
+        return _FakeResponse(payload)
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    ok, msg = update_from_github_zip(tmp_path, zip_url="https://example.invalid/archive.zip", timeout=12.0)
+    assert ok is True
+    assert "1" in msg
+    assert seen_urls == [("https://example.invalid/archive.zip", 12.0)]
+    assert (tmp_path / "azp" / "new_mod.py").read_text(encoding="utf-8") == "VALUE = 1\n"
+
+
+def test_update_from_git_handles_missing_git_dirty_tree_and_clean_pull(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from azp.updater import update_from_git
+
+    # Brak .git -> (False, ...)
+    ok_no_git, msg_no_git = update_from_git(tmp_path)
+    assert ok_no_git is False
+    assert "git" in msg_no_git.lower()
+
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr("azp.updater.shutil.which", lambda _name: "git")
+
+    # Lokalne modyfikacje -> pominięcie git pull, zwrot (True, ...)
+    calls_dirty: list[list[str]] = []
+
+    def fake_run_dirty(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls_dirty.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout=" M azp/main.py\n", stderr="")
+
+    monkeypatch.setattr("azp.updater.subprocess.run", fake_run_dirty)
+    ok_dirty, msg_dirty = update_from_git(tmp_path)
+    assert ok_dirty is True
+    assert "lokalne zmiany" in msg_dirty.lower()
+    assert calls_dirty == [["git", "status", "--porcelain", "--untracked-files=no"]]
+
+    # Czyste repozytorium -> wywołanie git pull --ff-only
+    calls_clean: list[list[str]] = []
+
+    def fake_run_clean(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls_clean.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("azp.updater.subprocess.run", fake_run_clean)
+    ok_clean, msg_clean = update_from_git(tmp_path)
+    assert ok_clean is True
+    assert "git pull" in msg_clean.lower()
+    assert calls_clean == [
+        ["git", "status", "--porcelain", "--untracked-files=no"],
+        ["git", "pull", "--ff-only"],
+    ]
+
+
+def test_update_project_code_falls_back_to_github_zip_when_no_git(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from azp.updater import update_project_code
+
+    captured: list[tuple[Path, str]] = []
+
+    def fake_zip_update(
+        project_root: Path, zip_url: str = "", timeout: float = 30.0
+    ) -> tuple[bool, str]:
+        captured.append((project_root, zip_url))
+        return True, "Pobrano i zaktualizowano 3 plików z GitHuba."
+
+    monkeypatch.setattr("azp.updater.update_from_github_zip", fake_zip_update)
+    ok, msg = update_project_code(project_root=tmp_path, zip_url="https://example.invalid/main.zip")
+    assert ok is True
+    assert "3" in msg
+    assert captured == [(tmp_path, "https://example.invalid/main.zip")]
+
+
+def test_update_project_code_does_not_fallback_to_zip_when_git_pull_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from azp.updater import update_project_code
+
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr("azp.updater.shutil.which", lambda _name: "git")
+
+    def fake_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        if cmd[:2] == ["git", "status"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="fatal: cannot lock ref")
+
+    monkeypatch.setattr("azp.updater.subprocess.run", fake_run)
+
+    zip_called: list[bool] = []
+    monkeypatch.setattr(
+        "azp.updater.update_from_github_zip",
+        lambda *_args, **_kwargs: (zip_called.append(True), (True, "zip"))[1],
+    )
+
+    ok, msg = update_project_code(project_root=tmp_path)
+    assert ok is False
+    assert msg.startswith("git pull nie powiódł się:")
+    assert "fatal: cannot lock ref" in msg
+    assert zip_called == []
+
+
+def test_main_update_flag_updates_code_and_installs_addin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from azp.main import main
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "azp.main.install_powerpoint_addin",
+        lambda: (calls.append("addin"), tmp_path / "AsystentZotero.ppam")[1],
+    )
+
+    monkeypatch.setattr(
+        "azp.main.update_project_code",
+        lambda: (calls.append("update"), (True, "Zaktualizowano kod przez git pull."))[1],
+    )
+    assert main(["--update"]) == 0
+    assert calls == ["update", "addin"]
+    out = capsys.readouterr().out
+    assert "Zaktualizowano kod przez git pull." in out
+    assert "AsystentZotero.ppam" in out
+
+    calls.clear()
+    monkeypatch.setattr(
+        "azp.main.update_project_code",
+        lambda: (calls.append("update"), (False, "Błąd sieci"))[1],
+    )
+    assert main(["--update"]) == 1
+    assert calls == ["update", "addin"]
+
+
+def test_main_addin_and_update_handle_permission_error_gracefully(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from azp.main import main
+
+    def raise_locked() -> Path:
+        raise PermissionError("Plik zablokowany")
+
+    monkeypatch.setattr("azp.main.install_powerpoint_addin", raise_locked)
+    monkeypatch.setattr(
+        "azp.main.update_project_code",
+        lambda: (True, "Zaktualizowano kod przez git pull."),
+    )
+
+    assert main(["--install-addin"]) == 1
+    out_install = capsys.readouterr().out
+    assert "Plik zablokowany" in out_install
+    assert "zamknij PowerPointa" in out_install
+
+    assert main(["--update"]) == 1
+    out_update = capsys.readouterr().out
+    assert "Zaktualizowano kod przez git pull." in out_update
+    assert "Plik zablokowany" in out_update
+    assert "zamknij PowerPointa" in out_update
+
+
+def test_install_or_update_bat_and_readme_exist_and_have_expected_content() -> None:
+    bat_path = REPO_ROOT / "instaluj_lub_aktualizuj.bat"
+    readme_path = REPO_ROOT / "README.md"
+
+    assert bat_path.is_file()
+    assert readme_path.is_file()
+
+    bat_raw = bat_path.read_bytes()
+    assert b"\r\n" in bat_raw
+    assert b"\n" not in bat_raw.replace(b"\r\n", b"")
+
+    bat_text = bat_raw.decode("utf-8")
+    assert "@echo off" in bat_text
+    assert "chcp 65001" in bat_text
+    assert 'cd /d "%~dp0"' in bat_text
+    assert "python --version" in bat_text
+    assert "Add python.exe to PATH" in bat_text
+    assert "python -m pip install -r requirements.txt" in bat_text
+    assert "python -m azp --update" in bat_text
+    assert "python -m azp --install-addin" in bat_text
+    assert "Asystent Zotero" in bat_text
+
+    readme_text = readme_path.read_text(encoding="utf-8")
+    assert "instaluj_lub_aktualizuj.bat" in readme_text
+    assert "IEEE v4" in readme_text
+    assert "APA 7" in readme_text
+    assert "config.json" in readme_text
+    assert "start_azp.bat" in readme_text
+    assert "install_pp_addin.bat" in readme_text
+    assert "--uninstall-addin" in readme_text

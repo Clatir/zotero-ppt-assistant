@@ -17,6 +17,7 @@ from azp.ppt import (
     is_powerpoint_addin_installed,
     uninstall_powerpoint_addin,
 )
+from azp.updater import update_project_code
 from azp.zotero import ZoteroClient
 
 
@@ -128,13 +129,40 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Uruchamia pływające okienko AZP lub instalator dodatku wstążki PowerPointa."""
     args = list(sys.argv[1:] if argv is None else argv)
     if "--install-addin" in args:
-        ppam = install_powerpoint_addin()
+        try:
+            ppam = install_powerpoint_addin()
+        except Exception as exc:
+            print(
+                "Nie udało się zainstalować dodatku PowerPointa "
+                f"(zamknij PowerPointa i spróbuj ponownie): {describe_error(exc)}"
+            )
+            return 1
         print(f"Zainstalowano dodatek wstążki PowerPointa: {ppam}")
         return 0
     if "--uninstall-addin" in args:
-        uninstall_powerpoint_addin()
+        try:
+            uninstall_powerpoint_addin()
+        except Exception as exc:
+            print(
+                "Nie udało się odinstalować dodatku PowerPointa "
+                f"(zamknij PowerPointa i spróbuj ponownie): {describe_error(exc)}"
+            )
+            return 1
         print("Odinstalowano dodatek wstążki PowerPointa.")
         return 0
+    if "--update" in args:
+        ok, msg = update_project_code()
+        print(msg)
+        try:
+            ppam = install_powerpoint_addin()
+        except Exception as exc:
+            print(
+                "Nie udało się zainstalować dodatku PowerPointa "
+                f"(zamknij PowerPointa i spróbuj ponownie): {describe_error(exc)}"
+            )
+            return 1
+        print(f"Zainstalowano dodatek wstążki PowerPointa: {ppam}")
+        return 0 if ok else 1
 
     if focus_existing_azp_window():
         return 0

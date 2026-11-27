@@ -4,8 +4,8 @@
 - **Zakończone ciągi / etapy:**
   - **Ciąg A – Fundament** (A1, A2).
   - **Ciąg B – Rdzeń** (Tor B1: **B1.1 Klient Zotero**, **B1.2 Okienko**; Tor B2: **B2.1 Warstwa PowerPoint**, **B2.2 Silnik numeracji i stylów**).
-  - **Ciąg C – Integracja i odbiór:** etapy kodowe **C1 Integracja** (`xhigh`), **C2 Dodatki** (`high`) oraz poprawki audytowe + **Tryb ciemny** (D21) + **Dodatek wstążki PowerPointa `.ppam`** (D22, T11, T12) zakończone, po przeglądach kodu, commity wypchnięte na GitHuba.
-- **Pełny zestaw testów:** `143 passed` bez COM + `3 passed` COM (`-m com`).
+  - **Ciąg C – Integracja i odbiór:** etapy kodowe **C1 Integracja** (`xhigh`), **C2 Dodatki** (`high`) oraz poprawki audytowe + **Tryb ciemny** (D21) + **Dodatek wstążki PowerPointa `.ppam`** (D22, T11, T12) + **Instalator i aktualizator jednym kliknięciem** (D23, T13) zakończone, po przeglądach kodu, commity wypchnięte na GitHuba.
+- **Pełny zestaw testów:** `151 passed` bez COM + `3 passed` COM (`-m com`).
 - **Następny krok:** **Etap C3 Odbiór na Twojej prezentacji** (wspólny odbiór na żywo według listy w `docs/odbior.md`).
 
 ## Kolejka
@@ -13,11 +13,11 @@
 |---|---|
 | A – Fundament | gotowe (A1, A2) |
 | B – Rdzeń (tory B1 i B2 równolegle) | gotowe (B1.1, B1.2, B2.1, B2.2) |
-| C – Integracja i odbiór | C1, C2 + poprawki audytu, tryb ciemny (D21) i wstążka PP (D22) gotowe; gotowe do C3 (Odbiór na Twojej prezentacji) |
+| C – Integracja i odbiór | C1, C2 + poprawki audytu, tryb ciemny (D21), wstążka PP (D22) i aktualizator (D23) gotowe; gotowe do C3 (Odbiór na Twojej prezentacji) |
 
 ## Zrealizowane etapy
 
-### Audyt kodu, Tryb ciemny i Dodatek wstążki PowerPointa (2026-11-27)
+### Audyt kodu, Tryb ciemny, Dodatek wstążki PowerPointa i Aktualizator (2026-11-27)
 - **Zakres:**
   - **Naprawa błędów „działających tylko teoretycznie” (T11):**
     1. *Martwe cytowania („duchy”) po ręcznym usunięciu w PowerPoincie (`azp/ppt/com_doc.py`)*: weryfikacja tagów `AZP_CITATIONS` względem aktualnego tekstu kształtów slajdu w `_get_citations_by_shape()` i `read_slides()`, sortowanie cytowań po faktycznej pozycji w tekście (obsługa przeklejania zdań) oraz usunięcie błędnego doklejania nieznalezionych cytowań z usuniętych pól do `shape_cits[0]`.
@@ -27,8 +27,9 @@
     5. *Wyszukiwanie wielowyrazowe i fallback stylu w `ZoteroClient` (`azp/zotero/client.py`)*: fallback wyszukiwania po tokenach przy zapytaniach łączących różne pola (autor + tytuł + rok), dociąganie wyników przy pustym zapytaniu ponad odfiltrowane załączniki/notatki oraz automatyczny fallback stylu `STYLE_IEEE_V4` → `http://www.zotero.org/styles/ieee` przy braku niestandardowego stylu v4 w Zotero (HTTP 400).
   - **Tryb ciemny okienka (D21):** pole `Settings.dark_mode: bool = False` w `azp/contracts.py`, przełącznik *Tryb ciemny* w `AzpWindow` (`azp/gui/app.py`), palety `DARK_THEME_COLORS` i `LIGHT_THEME_COLORS` ze stylizacją wszystkich widgetów `ttk`/`tk`, rozwijanych list `Combobox` oraz ciemnego paska tytułowego Windows 10/11 (DWM), z zapisem w `config.json` bez wywoływania przebudowy prezentacji.
   - **Dodatek na wstążce PowerPointa (D22, T12):** moduł `azp/ppt/addin.py` (`build_ppam_addin`, `build_vbs_launcher`, `install_powerpoint_addin`, `uninstall_powerpoint_addin`, `is_powerpoint_addin_installed`), skrypt `install_pp_addin.bat`, flagi CLI `--install-addin` / `--uninstall-addin` oraz `focus_existing_azp_window()` w `azp/main.py`. Tworzy i rejestruje w `HKCU` dodatek `AsystentZotero.ppam` z przyciskiem **Asystent Zotero** na kartach **Dodatki** (`TabAddIns`) oraz **Narzędzia główne** (`TabHome`) na wstążce PowerPointa.
-- **Decyzje:** D21, D22, T11, T12.
-- **Testy:** `pytest -q` (`143 passed`).
+  - **Instalator i aktualizator jednym kliknięciem (D23, T13):** moduł `azp/updater.py` (`update_from_git`, `extract_github_zip_bytes`, `update_from_github_zip`, `update_project_code`), flaga CLI `python -m azp --update`, zbiorczy skrypt `instaluj_lub_aktualizuj.bat` oraz polska instrukcja `README.md` (po 2 rundach przeglądu `high`).
+- **Decyzje:** D21–D23, T11–T13.
+- **Testy:** `pytest -q` (`151 passed`).
 
 ### C2 Dodatki (2026-11-27)
 - **Zakres:** `azp/config.py` (`DEFAULT_CONFIG_PATH`, `load_config`, `save_config` – zapis i odczyt domyślnych ustawień w `config.json` z bezpiecznym powrotem do `Settings()` przy braku pliku lub uszkodzonym JSON-ie), `.gitignore` (`config.json`), `azp/contracts.py` (ścisła walidacja typów w `Settings.__post_init__` i `Settings.from_dict` – M1), `azp/gui/app.py` i `azp/main.py` (integracja `config_path`, skróty klawiszowe wewnątrz okienka D15: `Enter` / `Ctrl+Enter` = *Cytuj*, `F5` / `Ctrl+R` = *Odśwież / Przenumeruj*, `Ctrl+F` = fokus i zaznaczenie pola *Szukaj*), `start_azp.pyw` i `start_azp.bat` (uruchamianie ikoną bez czarnej konsoli w tle D16), `tests/test_c2_extras.py` (26 przypadków testowych, w tym poprawki H1 i M1 z 1. rundy przeglądu `high`).
