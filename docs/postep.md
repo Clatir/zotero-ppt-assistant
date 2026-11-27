@@ -3,17 +3,23 @@
 ## Stan
 - **Zakończony ciąg:** Ciąg A – Fundament (A1, A2).
 - **W trakcie:** Ciąg B – Rdzeń:
-  - Tor B1: **B1.1 Klient Zotero** ukończony i zatwierdzony; trwa **B1.2 Okienko**.
-  - Tor B2: **B2.1 Warstwa PowerPoint** w przeglądzie kodu (`xhigh`); następnie **B2.2 Silnik numeracji i stylów**.
+  - Tor B1: **B1.1 Klient Zotero** ukończony; **B1.2 Okienko** w trakcie poprawek po 1. rundzie przeglądu (`high`).
+  - Tor B2: **B2.1 Warstwa PowerPoint** ukończony i zatwierdzony po 2 rundach przeglądu (`xhigh`); trwa **B2.2 Silnik numeracji i stylów**.
 
 ## Kolejka
 | Ciąg | Stan |
 |---|---|
 | A – Fundament | gotowe (A1, A2) |
-| B – Rdzeń (tory B1 i B2 równolegle) | w trakcie (B1.1 gotowe; trwa B1.2 oraz B2.1→B2.2) |
+| B – Rdzeń (tory B1 i B2 równolegle) | w trakcie (B1.1 i B2.1 gotowe; trwa B1.2 oraz B2.2) |
 | C – Integracja i odbiór | – |
 
 ## Zrealizowane etapy
+
+### B2.1 Warstwa PowerPoint (2026-11-27)
+- **Zakres:** `azp/ppt/com_doc.py`, `azp/ppt/powerpoint.py`, `azp/ppt/__init__.py` (`PowerPointSlideDoc` implementujący `SlideDoc`, wykrywanie aktywnego slajdu i kursora z `ActiveWindow.Selection` oraz w trybie bezokienkowym, blokada D10 bez kursora, wstawianie i automatyczne scalanie sąsiednich cytowań D13, izolacja cytowań per kształt tekstowy T9, pole źródeł w 3 położeniach D9 z nagłówkiem „Źródła:” lub bez, czcionka/rozmiar/kursywa na podzakresach `Characters(start, len)` i autodopasowanie, tagi `AZP_*`, dwuprzebiegowa podmiana cytowań, kopia zapasowa `.bak.pptx`), `tests/test_ppt.py` (11 testów jednostkowych + kompleksowy test COM, w tym 4 poprawki H1, H2, M1, M2 z 1. rundy przeglądu `xhigh`).
+- **Decyzje:** T9 (oraz realizacja D5, D9, D10, D13, D14, T3, T4, T7, T8).
+- **Testy:** `pytest -q tests/test_ppt.py` (`11 passed in 0.10s`), `pytest -q -m com tests/test_ppt.py` (`1 passed in 15.57s`).
+- **Czas faktyczny:** ~20 min (szacunek: 1–1,5 h).
 
 ### B1.1 Klient Zotero (2026-11-27)
 - **Zakres:** `azp/zotero/html_parser.py` (`parse_csl_bib_html`, `parse_csl_citation_html` – konwersja HTML CSL na `TextSpan` z kursywą i pogrubieniem, dekodowaniem encji HTML, obsługą znaczników void `<br>` oraz usuwaniem wiodącego `[n]` w stylach numerycznych zgodnie z T4 i T8), `azp/zotero/client.py` (`ZoteroClient` implementujący `ZoteroSource`: `is_available`, `search_items` po autorze/tytule/roku, `get_formatted_ref`, `get_formatted_refs`, `list_styles`, obsługa `ZoteroOfflineError` z komunikatem „Zotero nie odpowiada”), `tests/test_zotero.py` (25 testów jednostkowych i integracyjnych z żywym Zotero 10, w tym 3 poprawki M1–M3 z 1. rundy przeglądu `high`).
