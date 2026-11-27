@@ -2,6 +2,7 @@
 
 Pływające okienko (Windows) do cytowania pozycji ze Zotero 10 w PowerPoincie: cytowanie w tekście slajdu,
 źródła w stopce pod slajdem, przenumerowanie i przełączanie stylów (IEEE v4 / APA). Interfejs po polsku.
+Repozytorium publiczne (`Clatir/zotero-ppt-assistant`) – bez danych użytkownika i osobistych treści (D12).
 Zasady pracy przeniesione z `Clatir/RegulatedDay` (CLAUDE.md, „Zasady współpracy”, skill `etap`), dostosowane do Antigravity.
 
 ## Zasady współpracy
@@ -15,14 +16,14 @@ Zasady pracy przeniesione z `Clatir/RegulatedDay` (CLAUDE.md, „Zasady współp
 - **Główna sesja** (Claude Opus 5.5) zleca test i kod każdego etapu **wykonawcy** (subagent) według kolumny „Wykonawca”
   w `docs/plan.md`, a sama sprawdza, robi przegląd, commit i wpisy w dokumentach. Wykonawca nie commituje.
 - Do gałęzi `main` pisze naraz jedna sesja. Wykonawcy równoległi piszą tylko w swoich, rozłącznych katalogach.
-- Git lokalny; push na GitHuba tylko, gdy użytkownik o to poprosi.
+- Po każdym etapie commit i `git push` na GitHuba (`Clatir/zotero-ppt-assistant`, D12).
 - **Przegląd kodu** (subagent-recenzent) według ryzyka: *xhigh* – COM PowerPointa i silnik numeracji (zmieniają plik
   użytkownika); *high* – reszta kodu; *medium* – dokumenty. Najwyżej trzy rundy (druga i trzecia tylko na poprawkach).
   Poprawiamy critical i high zawsze, z testem; medium – gdy da się napisać test, który bez poprawki pada. Reszta →
   „Uwagi na później” w postępie. Z przeglądu nie wchodzi zmiana zachowania widocznego dla użytkownika bez pytania.
 - Po wznowieniu (limit, nowa rozmowa) najpierw przeczytaj `docs/postep.md`.
 - **Czysty start (`/compact` albo nowa rozmowa):** przy każdej pauzie powiedz wprost, czy można go teraz bezpiecznie
-  zrobić. Bezpiecznie = wszystko w commitach, `docs/postep.md` mówi, co dalej, nic nie zależy od pamięci rozmowy.
+  zrobić. Bezpiecznie = wszystko w commitach wypchniętych na GitHuba, `docs/postep.md` mówi, co dalej, nic nie zależy od pamięci rozmowy.
 
 ## Zasady produktu
 - Narzędzie nigdy nie psuje prezentacji: przed każdą przebudową całej prezentacji kopia zapasowa pliku.
