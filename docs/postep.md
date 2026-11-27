@@ -3,17 +3,23 @@
 ## Stan
 - **Zakończony ciąg:** Ciąg A – Fundament (A1, A2).
 - **W trakcie:** Ciąg B – Rdzeń:
-  - Tor B1: **B1.1 Klient Zotero** ukończony; **B1.2 Okienko** w trakcie poprawek po 1. rundzie przeglądu (`high`).
-  - Tor B2: **B2.1 Warstwa PowerPoint** ukończony i zatwierdzony po 2 rundach przeglądu (`xhigh`); trwa **B2.2 Silnik numeracji i stylów**.
+  - Tor B1: **ukończony w całości** (**B1.1 Klient Zotero** oraz **B1.2 Okienko** zatwierdzone i wypchnięte na GitHuba).
+  - Tor B2: **B2.1 Warstwa PowerPoint** ukończony; trwa **B2.2 Silnik numeracji i stylów**.
 
 ## Kolejka
 | Ciąg | Stan |
 |---|---|
 | A – Fundament | gotowe (A1, A2) |
-| B – Rdzeń (tory B1 i B2 równolegle) | w trakcie (B1.1 i B2.1 gotowe; trwa B1.2 oraz B2.2) |
+| B – Rdzeń (tory B1 i B2 równolegle) | w trakcie (B1.1, B1.2, B2.1 gotowe; trwa B2.2) |
 | C – Integracja i odbiór | – |
 
 ## Zrealizowane etapy
+
+### B1.2 Okienko (2026-11-27)
+- **Zakres:** `azp/gui/app.py`, `azp/gui/__init__.py` (`AzpController`, `AzpWindow` – pływające okienko tkinter po polsku: wyszukiwarka z obsługą `<Return>`, lista wyników z wielokrotnym wyborem Ctrl/Shift D13, przyciski *Cytuj* i *Odśwież / Przenumeruj*, listy wyboru stylu D2/D3, trybu numeracji D4, czcionki z systemu `tkinter.font.families()` i rozmiaru D5, 3 położeń pola źródeł D9, nagłówka „Źródła:” tak/nie D9, natychmiastowa przebudowa z kopią zapasową `.bak.pptx` po zmianie ustawień D14 wraz z wycofaniem wyboru przy błędzie H1, blokada *Cytuj* bez kursora D10, przełącznik „Zawsze na wierzchu”, obsługa `ZoteroOfflineError`), `tests/test_gui.py` (16 testów z atrapami `FakeZoteroSource` i `FakeSlideDoc`, w tym 2 poprawki H1 i M1 z 1. rundy przeglądu `high`).
+- **Decyzje:** realizacja D1–D5, D9, D10, D13, D14.
+- **Testy:** `pytest -q tests/test_gui.py` (`16 passed in 1.93s`).
+- **Czas faktyczny:** ~12 min (szacunek: 45–60 min).
 
 ### B2.1 Warstwa PowerPoint (2026-11-27)
 - **Zakres:** `azp/ppt/com_doc.py`, `azp/ppt/powerpoint.py`, `azp/ppt/__init__.py` (`PowerPointSlideDoc` implementujący `SlideDoc`, wykrywanie aktywnego slajdu i kursora z `ActiveWindow.Selection` oraz w trybie bezokienkowym, blokada D10 bez kursora, wstawianie i automatyczne scalanie sąsiednich cytowań D13, izolacja cytowań per kształt tekstowy T9, pole źródeł w 3 położeniach D9 z nagłówkiem „Źródła:” lub bez, czcionka/rozmiar/kursywa na podzakresach `Characters(start, len)` i autodopasowanie, tagi `AZP_*`, dwuprzebiegowa podmiana cytowań, kopia zapasowa `.bak.pptx`), `tests/test_ppt.py` (11 testów jednostkowych + kompleksowy test COM, w tym 4 poprawki H1, H2, M1, M2 z 1. rundy przeglądu `xhigh`).

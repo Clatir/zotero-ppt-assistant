@@ -24,6 +24,10 @@ Nie przechodzi, gdy.
   - *Jak sprawdzić:* przy zamkniętym PowerPoincie uruchom `python -m pytest -q tests/test_ppt.py` oraz `python -m pytest -q -m com tests/test_ppt.py`.
   - *Oczekiwany efekt:* przechodzą wszystkie testy jednostkowe (`11 passed`) oraz test COM (`1 passed`); sprawdzane są: blokada wstawienia cytowania bez kursora (D10), wstawienie i automatyczne scalanie sąsiednich cytowań (D13), izolacja cytowań przy wielu polach tekstowych na slajdzie (T9), tworzenie pola źródeł w 3 położeniach (`bottom_full`, `bottom_left`, `replace_footer` – D9) z nagłówkiem „Źródła:” i bez, czcionka, rozmiar i kursywa na podzakresach `Characters(start, len)` (D5, T4), trwałość tagów po ponownym otwarciu pliku, dwuprzebiegowa podmiana cytowań oraz tworzenie kopii zapasowej `.bak.pptx`.
   - *Nie przechodzi, gdy:* PowerPoint użytkownika jest otwarty przed testem COM lub którykolwiek z testów w `tests/test_ppt.py` zgłasza błąd.
+- **B1.2 Okienko GUI (`AzpWindow` / `AzpController`)** – **Automatycznie:** `tests/test_gui.py` (16 testów z atrapami `FakeZoteroSource` i `FakeSlideDoc`)
+  - *Jak sprawdzić:* uruchom `python -m pytest -q tests/test_gui.py`.
+  - *Oczekiwany efekt:* 16 testów przechodzi (`16 passed`); wyszukiwarka, wielokrotny wybór wyników (Ctrl/Shift – D13), blokada *Cytuj* bez kursora w polu tekstowym (D10), lista czcionek z systemu (D5), 3 położenia pola źródeł i przełącznik nagłówka „Źródła:” (D9), natychmiastowa przebudowa prezentacji z kopią zapasową `.bak.pptx` po zmianie ustawień (D14) wraz z wycofaniem wyboru przy błędzie Zotero oraz opcja „Zawsze na wierzchu” działają poprawnie.
+  - *Nie przechodzi, gdy:* którykolwiek z 16 testów w `tests/test_gui.py` zgłasza błąd.
 
 ## Wszystkie punkty
 - A1.1 Odpowiedź lokalnego API Zotero dla stylów IEEE v4 i APA
@@ -31,3 +35,4 @@ Nie przechodzi, gdy.
 - A2.1 Zgodność kontraktów `ZoteroSource` i `SlideDoc` oraz atrap testowych
 - B1.1 Klient lokalnego API Zotero i parser HTML CSL
 - B2.1 Warstwa COM PowerPoint (`PowerPointSlideDoc`)
+- B1.2 Okienko GUI (`AzpWindow` / `AzpController`)
