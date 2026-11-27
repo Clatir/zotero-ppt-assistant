@@ -18,3 +18,7 @@
 | D14 | 2026-11-27 | Zmiana stylu, trybu numeracji, czcionki, rozmiaru lub położenia stopki na liście wyboru w okienku od razu przebudowuje całą prezentację (po automatycznym utworzeniu kopii zapasowej `.bak.pptx`). |
 | D15 | 2026-11-27 | Skróty klawiszowe (C2): skróty wewnątrz okienka (`Enter` / `Ctrl+Enter` = *Cytuj* na liście wyników, `F5` / `Ctrl+R` = *Odśwież / Przenumeruj*, `Ctrl+F` = fokus na polu *Szukaj*), bez globalnego przechwytywania klawiatury w Windows. |
 | D16 | 2026-11-27 | Uruchamianie ikoną (C2): skrypt startowy `start_azp.bat` / `start_azp.pyw` (uruchamiający okienko bez czarnej konsoli w tle), bez pakowania do `.exe`. |
+| D17 | 2026-11-27 | Kopia zapasowa przed przebudową przez „Zapisz kopię jako” (`SaveCopyAs`) do `<nazwa>.bak.pptx` obok pliku; plik użytkownika na dysku nie jest zapisywany bez jego wiedzy. |
+| D18 | 2026-11-27 | Niezapisana prezentacja (bez pliku): przebudowa (zmiana ustawień, *Odśwież / Przenumeruj*) nie jest wykonywana – komunikat „Zapisz prezentację, żeby można było zrobić kopię zapasową”, ustawienie wraca do poprzedniego; *Cytuj* działa normalnie. |
+| D19 | 2026-11-27 | Okienko śledzi aktywną prezentację: po przełączeniu wczytuje jej ustawienia (styl, numeracja, czcionka, położenie, nagłówek); prezentacja bez ustawień AZP dostaje ustawienia aktualnie widoczne w okienku. |
+| D20 | 2026-11-27 | Po *Cytuj* fokus wraca do PowerPointa, kursor stoi za wstawionym cytowaniem. |

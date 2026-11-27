@@ -9,7 +9,8 @@ import shutil
 from typing import Any, NamedTuple, Sequence
 
 from azp.contracts import (
-     VALID_FOOTER_POSITIONS,
+    VALID_FOOTER_POSITIONS,
+    BackupError,
     Citation,
     FooterEntry,
     FooterPosition,
@@ -65,6 +66,14 @@ class CharFormatRange(NamedTuple):
     length: int
     italic: bool = False
     bold: bool = False
+
+
+class TextEdit(NamedTuple):
+    """0-based edycja podzakresu tekstu kształtu (`start`, `length`, `new_text`) – T10."""
+
+    start: int
+    length: int
+    new_text: str
 
 
 @dataclass
@@ -263,15 +272,23 @@ def find_adjacent_citation_in_text(
     return best[2] if best is not None else None
 
 
-def apply_citation_at_cursor_in_text(
+def apply_text_edits(text: str, edits: Sequence[TextEdit]) -> str:
+    """Stosuje rozłączne edycje `TextEdit` w kolejności od końca do początku tekstu (T10)."""
+    result = text
+    for edit in sorted(edits, key=lambda e: e.start, reverse=True):
+        result = f"{result[:edit.start]}{edit.new_text}{result[edit.start + edit.length:]}"
+    return result
+
+
+def plan_citation_insert(
     shape_text: str,
     char_pos: int,
     citation: Citation,
     existing_citations: Sequence[Citation],
-) -> tuple[str, list[Citation], int]:
-    """Wstawia cytowanie na pozycji `char_pos` lub scala je z sąsiednim cytowaniem (D13).
+) -> tuple[TextEdit, list[Citation], int]:
+    """Wyznacza pojedynczą edycję `TextEdit` dla wstawienia lub scalenia cytowania (D13, T10).
 
-    Zwraca `(new_shape_text, updated_citations, new_char_pos)`.
+    Zwraca `(edit, updated_citations, new_char_pos)`.
     """
     pos = max(0, min(int(char_pos), len(shape_text)))
     adj = find_adjacent_citation_in_text(shape_text, pos, existing_citations)
@@ -279,11 +296,11 @@ def apply_citation_at_cursor_in_text(
     if adj is not None:
         cit_idx, existing_cit, start, end = adj
         merged = merge_citations(existing_cit, citation)
-        new_text = f"{shape_text[:start]}{merged.text}{shape_text[end:]}"
+        edit = TextEdit(start=start, length=end - start, new_text=merged.text)
         new_citations = list(existing_citations)
         new_citations[cit_idx] = merged
         new_pos = start + len(merged.text)
-        return new_text, new_citations, new_pos
+        return edit, new_citations, new_pos
 
     needs_space = (
         pos > 0
@@ -292,7 +309,7 @@ def apply_citation_at_cursor_in_text(
     )
     prefix = " " if needs_space else ""
     inserted = f"{prefix}{citation.text}"
-    new_text = f"{shape_text[:pos]}{inserted}{shape_text[pos:]}"
+    edit = TextEdit(start=pos, length=0, new_text=inserted)
 
     located = _locate_citation_spans_in_text(shape_text, existing_citations)
     start_by_idx = {cit_idx: start for cit_idx, _, start, _ in located}
@@ -306,7 +323,118 @@ def apply_citation_at_cursor_in_text(
     new_citations = list(existing_citations)
     new_citations.insert(insert_list_idx, citation)
     new_pos = pos + len(inserted)
-    return new_text, new_citations, new_pos
+    return edit, new_citations, new_pos
+
+
+def apply_citation_at_cursor_in_text(
+    shape_text: str,
+    char_pos: int,
+    citation: Citation,
+    existing_citations: Sequence[Citation],
+) -> tuple[str, list[Citation], int]:
+    """Wstawia cytowanie na pozycji `char_pos` lub scala je z sąsiednim cytowaniem (D13).
+
+    Zwraca `(new_shape_text, updated_citations, new_char_pos)`.
+    """
+    edit, new_citations, new_pos = plan_citation_insert(
+        shape_text=shape_text,
+        char_pos=char_pos,
+        citation=citation,
+        existing_citations=existing_citations,
+    )
+    return apply_text_edits(shape_text, [edit]), new_citations, new_pos
+
+
+def plan_citation_replacements(
+    text: str,
+    old_citations: Sequence[Citation],
+    new_citations: Sequence[Citation],
+) -> list[TextEdit]:
+    """Wyznacza listę edycji `TextEdit` (posortowaną malejąco po `start`) dla podmiany cytowań (T10).
+
+    Lokalizuje niepokrywające się wystąpienia starych cytowań w kolejności `old_citations`
+    i zwraca tylko te zakresy, których tekst faktycznie się zmienia.
+    """
+    new_by_id = {c.citation_id: c.text for c in new_citations}
+    used_intervals: list[tuple[int, int]] = []
+    edits: list[TextEdit] = []
+
+    for old_cit in old_citations:
+        if old_cit.citation_id not in new_by_id or not old_cit.text:
+            continue
+        target_new_text = new_by_id[old_cit.citation_id]
+        search_from = 0
+        while search_from <= len(text) - len(old_cit.text):
+            pos = text.find(old_cit.text, search_from)
+            if pos == -1:
+                break
+            end = pos + len(old_cit.text)
+            overlaps = any(
+                not (end <= u_start or pos >= u_end)
+                for u_start, u_end in used_intervals
+            )
+            if not overlaps:
+                used_intervals.append((pos, end))
+                if target_new_text != old_cit.text:
+                    edits.append(
+                        TextEdit(
+                            start=pos,
+                            length=len(old_cit.text),
+                            new_text=target_new_text,
+                        )
+                    )
+                break
+            search_from = pos + 1
+
+    edits.sort(key=lambda e: e.start, reverse=True)
+    return edits
+
+
+def _apply_text_edit_to_text_range(tr: Any, edit: TextEdit) -> None:
+    """Stosuje pojedynczą edycję `TextEdit` na obiekcie `TextRange` przez podzakres `Characters` (T10)."""
+    if hasattr(tr, "Characters"):
+        if edit.length == 0:
+            sub = tr.Characters(edit.start + 1, 0)
+            if hasattr(sub, "InsertAfter"):
+                sub.InsertAfter(edit.new_text)
+            else:
+                sub.Text = edit.new_text
+        else:
+            tr.Characters(edit.start + 1, edit.length).Text = edit.new_text
+    else:
+        current = str(tr.Text)
+        tr.Text = f"{current[:edit.start]}{edit.new_text}{current[edit.start + edit.length:]}"
+
+
+def choose_powerpoint_window(
+    windows: Sequence[tuple[int, str]],
+    presentation_name: str = "",
+) -> int | None:
+    """Wybiera uchwyt okna PowerPointa (`hwnd`) pasujący do nazwy prezentacji (D20)."""
+    filtered = [
+        (hwnd, title)
+        for hwnd, title in windows
+        if "asystent zotero dla powerpointa" not in (title or "").casefold()
+    ]
+    if not filtered:
+        return None
+
+    titled = [(hwnd, title) for hwnd, title in filtered if title and title.strip()]
+    clean_name = presentation_name.strip()
+    if clean_name:
+        target_full = clean_name.casefold()
+        target_stem = Path(clean_name).stem.casefold()
+        for hwnd, title in titled:
+            if target_full in title.casefold():
+                return hwnd
+        if target_stem:
+            for hwnd, title in titled:
+                if target_stem in title.casefold():
+                    return hwnd
+
+    if titled:
+        return titled[0][0]
+    return filtered[0][0]
 
 
 def replace_citations_two_pass(
@@ -498,6 +626,7 @@ class PowerPointSlideDoc:
         self._presentation = presentation
         self._active_slide_index = active_slide_index
         self._cursor_target: _CursorTarget | None = None
+        self._last_insert_cursor: tuple[int, tuple[int | None, str | None], int] | None = None
 
     def set_active_slide(self, slide_index: int | None) -> None:
         """Pomocnicza metoda ustawiająca aktywny slajd w trybie bezokienkowym (`WithWindow=0`)."""
@@ -510,6 +639,7 @@ class PowerPointSlideDoc:
         char_pos: int | None = None,
     ) -> None:
         """Ustawia lub czyści (`slide_index=None`) programowy cel kursora dla trybu `WithWindow=0`."""
+        self._last_insert_cursor = None
         if slide_index is None:
             self._cursor_target = None
             app = self._get_app()
@@ -697,6 +827,81 @@ class PowerPointSlideDoc:
         except Exception:
             return None
 
+    def get_presentation_key(self) -> str | None:
+        """Zwraca identyfikator aktywnej prezentacji (`FullName` lub `Name`) albo `None` (D19)."""
+        pres = self._get_presentation()
+        if pres is None:
+            return None
+        for attr in ("FullName", "Name"):
+            try:
+                val = str(getattr(pres, attr)).strip()
+                if val:
+                    return val
+            except Exception:
+                continue
+        path = self.get_presentation_path()
+        return str(path) if path is not None else None
+
+    def focus_presentation_window(self) -> bool:
+        """Przywraca fokus do okna PowerPointa po wstawieniu cytowania (D20)."""
+        if self._cursor_target is not None:
+            return False
+        app = self._get_app()
+        if app is not None:
+            try:
+                if int(app.Visible) == MSO_FALSE:
+                    return False
+            except Exception:
+                pass
+        pres = self._get_presentation()
+        pres_name = ""
+        if pres is not None:
+            for attr in ("Name", "FullName"):
+                try:
+                    val = str(getattr(pres, attr)).strip()
+                    if val:
+                        pres_name = Path(val).name or val
+                        break
+                except Exception:
+                    continue
+
+        if app is not None:
+            try:
+                app.ActiveWindow.Activate()
+            except Exception:
+                pass
+
+        try:
+            import win32con
+            import win32gui
+
+            ppt_frame_candidates: list[tuple[int, str]] = []
+            title_candidates: list[tuple[int, str]] = []
+
+            def _enum_cb(hwnd: int, _extra: Any) -> None:
+                if not win32gui.IsWindowVisible(hwnd):
+                    return
+                cls_name = win32gui.GetClassName(hwnd)
+                title = win32gui.GetWindowText(hwnd)
+                if cls_name == "TkTopLevel" or "asystent zotero dla powerpointa" in title.casefold():
+                    return
+                if cls_name == "PPTFrameClass":
+                    ppt_frame_candidates.append((hwnd, title))
+                elif "powerpoint" in title.casefold():
+                    title_candidates.append((hwnd, title))
+
+            win32gui.EnumWindows(_enum_cb, None)
+            candidates = ppt_frame_candidates or title_candidates
+            target_hwnd = choose_powerpoint_window(candidates, pres_name)
+            if target_hwnd is not None:
+                if win32gui.IsIconic(target_hwnd):
+                    win32gui.ShowWindow(target_hwnd, win32con.SW_RESTORE)
+                win32gui.SetForegroundWindow(target_hwnd)
+                return True
+        except Exception:
+            pass
+        return False
+
     def has_text_cursor(self) -> bool:
         """Zwraca `True`, jeśli kursor stoi w polu tekstowym na aktywnym slajdzie (D10)."""
         return self._resolve_cursor_context() is not None
@@ -737,6 +942,22 @@ class PowerPointSlideDoc:
                 pass
 
         raise NoActiveSlideError("Brak aktywnego slajdu w PowerPoincie.")
+
+    @staticmethod
+    def _shape_key(shape: Any) -> tuple[int | None, str | None]:
+        shape_id: int | None = None
+        shape_name: str | None = None
+        try:
+            if hasattr(shape, "Id"):
+                shape_id = int(shape.Id)
+        except Exception:
+            pass
+        try:
+            if hasattr(shape, "Name"):
+                shape_name = str(shape.Name)
+        except Exception:
+            pass
+        return (shape_id, shape_name)
 
     @staticmethod
     def _same_shape(a: Any, b: Any) -> bool:
@@ -847,14 +1068,14 @@ class PowerPointSlideDoc:
                 shape_citations = cits
                 break
 
-        new_text, updated_shape_citations, new_char_pos = apply_citation_at_cursor_in_text(
+        edit, updated_shape_citations, new_char_pos = plan_citation_insert(
             shape_text=shape_text,
             char_pos=char_pos,
             citation=citation,
             existing_citations=shape_citations,
         )
 
-        shape.TextFrame.TextRange.Text = new_text
+        _apply_text_edit_to_text_range(shape.TextFrame.TextRange, edit)
         if by_shape:
             by_shape[target_idx] = (by_shape[target_idx][0], updated_shape_citations)
             self._sync_slide_citations_from_shapes(slide, by_shape)
@@ -862,6 +1083,7 @@ class PowerPointSlideDoc:
             _set_tag(shape, TAG_CITATIONS, serialize_citations(updated_shape_citations))
             _set_tag(slide, TAG_CITATIONS, serialize_citations(updated_shape_citations))
 
+        self._last_insert_cursor = (slide_idx, self._shape_key(shape), new_char_pos)
         if self._cursor_target is not None:
             self._cursor_target = _CursorTarget(
                 slide_index=slide_idx,
@@ -1030,19 +1252,49 @@ class PowerPointSlideDoc:
 
         updated_by_shape: list[tuple[Any, list[Citation]]] = []
         for shape, old_shape_cits in by_shape:
-            old_t = str(shape.TextFrame.TextRange.Text)
+            tr = shape.TextFrame.TextRange
+            old_t = str(tr.Text)
             new_shape_cits = [
                 new_by_id[c.citation_id]
                 for c in old_shape_cits
                 if c.citation_id in new_by_id
             ]
-            new_t = replace_citations_in_text(
+            edits = plan_citation_replacements(
                 text=old_t,
                 old_citations=old_shape_cits,
                 new_citations=new_shape_cits,
             )
-            if new_t != old_t:
-                shape.TextFrame.TextRange.Text = new_t
+            for edit in edits:
+                _apply_text_edit_to_text_range(tr, edit)
+            if (
+                edits
+                and self._last_insert_cursor is not None
+                and self._last_insert_cursor[0] == slide_index
+                and self._last_insert_cursor[1] == self._shape_key(shape)
+            ):
+                old_char_pos = self._last_insert_cursor[2]
+                delta = 0
+                for edit in edits:
+                    if edit.start + edit.length <= old_char_pos:
+                        delta += len(edit.new_text) - edit.length
+                    elif edit.start < old_char_pos < edit.start + edit.length:
+                        delta += (edit.start + len(edit.new_text)) - old_char_pos
+                char_pos = max(0, min(old_char_pos + delta, len(str(tr.Text))))
+                self._last_insert_cursor = (slide_index, self._shape_key(shape), char_pos)
+                if (
+                    self._cursor_target is not None
+                    and self._cursor_target.slide_index == slide_index
+                ):
+                    self._cursor_target = _CursorTarget(
+                        slide_index=slide_index,
+                        shape_index_or_name=self._cursor_target.shape_index_or_name,
+                        char_pos=char_pos,
+                    )
+                else:
+                    try:
+                        tr.Characters(char_pos + 1, 0).Select()
+                    except Exception:
+                        pass
             updated_by_shape.append((shape, new_shape_cits))
 
         if updated_by_shape:
@@ -1065,16 +1317,24 @@ class PowerPointSlideDoc:
         _set_tag(pres, TAG_SETTINGS, serialize_settings(settings))
 
     def create_backup(self) -> Path | None:
-        """Tworzy kopię zapasową `<nazwa>.bak.pptx` obok oryginału przed przebudową prezentacji."""
+        """Tworzy kopię zapasową `<nazwa>.bak.<rozsz>` przez `SaveCopyAs` bez zapisu oryginału (D17)."""
         pres = self._get_presentation()
         if pres is None:
             return None
         path = self.get_presentation_path()
         if path is None:
             return None
-        pres.Save()
-        backup_path = path.with_suffix(".bak.pptx")
-        shutil.copy2(path, backup_path)
+        suffix = path.suffix or ".pptx"
+        backup_path = path.with_suffix(f".bak{suffix}")
+        try:
+            if hasattr(pres, "SaveCopyAs"):
+                pres.SaveCopyAs(str(backup_path))
+            else:
+                shutil.copy2(path, backup_path)
+        except Exception as exc:
+            raise BackupError(
+                f"Nie udało się utworzyć kopii zapasowej ({backup_path.name}): {exc}"
+            ) from exc
         return backup_path
 
 
@@ -1093,8 +1353,11 @@ __all__ = [
     "TAG_ROLE",
     "TAG_ROLE_FOOTER",
     "TAG_SETTINGS",
+    "TextEdit",
     "apply_citation_at_cursor_in_text",
+    "apply_text_edits",
     "build_footer_text_and_ranges",
+    "choose_powerpoint_window",
     "compute_footer_geometry",
     "deserialize_citations",
     "deserialize_footer_entries",
@@ -1102,6 +1365,8 @@ __all__ = [
     "find_adjacent_citation_in_text",
     "merge_citation_texts",
     "merge_citations",
+    "plan_citation_insert",
+    "plan_citation_replacements",
     "replace_citations_in_text",
     "replace_citations_two_pass",
     "serialize_citations",

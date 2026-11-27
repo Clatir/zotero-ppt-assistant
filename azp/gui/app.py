@@ -5,14 +5,17 @@ from __future__ import annotations
 import tkinter as tk
 import uuid
 from dataclasses import replace
+from pathlib import Path
 from tkinter import font as tkfont
 from tkinter import ttk
 from typing import Callable, Sequence
 
 from azp.contracts import (
+    MSG_SAVE_BEFORE_REBUILD,
     STYLE_APA,
     STYLE_IEEE_V4,
     AzpError,
+    BackupError,
     Citation,
     FooterEntry,
     FooterPosition,
@@ -194,6 +197,50 @@ class AzpController:
         self.last_query: str = ""
         self.status_message: str = "Gotowy."
         self._styles: list[StyleInfo] = self._load_styles()
+        self._active_presentation_key: str | None = self._current_presentation_key()
+
+    def _current_presentation_key(self) -> str | None:
+        if not self.slide_doc.has_open_presentation():
+            return None
+        get_key = getattr(self.slide_doc, "get_presentation_key", None)
+        if callable(get_key):
+            try:
+                key = get_key()
+            except AzpError:
+                return None
+            if key is not None and str(key).strip():
+                return str(key).strip()
+        try:
+            path = self.slide_doc.get_presentation_path()
+        except AzpError:
+            return None
+        return str(path) if path is not None else "__open_presentation__"
+
+    def sync_with_active_presentation(self) -> bool:
+        """Sprawdza, czy użytkownik przełączył aktywną prezentację i wczytuje jej ustawienia (D19)."""
+        current_key = self._current_presentation_key()
+        if current_key is None:
+            self._active_presentation_key = None
+            return False
+        if current_key == self._active_presentation_key:
+            return False
+
+        self._active_presentation_key = current_key
+        try:
+            loaded = self.slide_doc.load_settings()
+        except AzpError:
+            loaded = None
+
+        current_topmost = self.settings.always_on_top
+        if loaded is not None:
+            self.settings = replace(loaded, always_on_top=current_topmost)
+
+        label = Path(current_key).name or current_key
+        if label == "__open_presentation__":
+            self.status_message = "Przełączono aktywną prezentację."
+        else:
+            self.status_message = f"Aktywna prezentacja: {label}."
+        return True
 
     def _load_styles(self) -> list[StyleInfo]:
         try:
@@ -250,6 +297,7 @@ class AzpController:
 
     def cite_keys(self, keys: Sequence[str]) -> bool:
         """Wstawia cytowanie dla wybranych kluczy na aktywnym slajdzie."""
+        self.sync_with_active_presentation()
         selected_keys = tuple(dict.fromkeys(keys))
         if not selected_keys:
             self.status_message = "Wybierz pozycję do zacytowania."
@@ -348,8 +396,13 @@ class AzpController:
 
     def refresh_presentation(self) -> bool:
         """Tworzy kopię zapasową i przebudowuje cytowania oraz stopki na wszystkich slajdach."""
+        self.sync_with_active_presentation()
         if not self.slide_doc.has_open_presentation():
             self.status_message = "Brak otwartej prezentacji w PowerPoincie."
+            return False
+
+        if self.slide_doc.get_presentation_path() is None:
+            self.status_message = MSG_SAVE_BEFORE_REBUILD
             return False
 
         if self.on_rebuild is not None:
@@ -357,6 +410,9 @@ class AzpController:
                 msg = self.on_rebuild(self.settings)
             except ZoteroOfflineError as exc:
                 self.status_message = _format_zotero_offline_message(exc)
+                return False
+            except BackupError as exc:
+                self.status_message = str(exc) or MSG_SAVE_BEFORE_REBUILD
                 return False
             except AzpError as exc:
                 self.status_message = str(exc)
@@ -384,6 +440,9 @@ class AzpController:
 
         try:
             backup_path = self.slide_doc.create_backup()
+            if backup_path is None:
+                self.status_message = MSG_SAVE_BEFORE_REBUILD
+                return False
             is_numeric = self._is_numeric_style(self.settings.style_id)
 
             global_num_map: dict[str, int] = {}
@@ -432,6 +491,7 @@ class AzpController:
 
     def update_settings(self, rebuild: bool = True, **changes: object) -> bool:
         """Aktualizuje ustawienia i przy zmianie opcji formatowania przebudowuje prezentację (D14)."""
+        self.sync_with_active_presentation()
         previous_settings = self.settings
         new_settings = replace(previous_settings, **changes)  # type: ignore[arg-type]
         if new_settings == previous_settings:
@@ -466,6 +526,7 @@ class AzpWindow:
         on_cite: CiteCallback | None = None,
         on_rebuild: RebuildCallback | None = None,
         initial_search: bool = True,
+        poll_interval_ms: int | None = 500,
     ) -> None:
         self.controller = AzpController(
             zotero=zotero,
@@ -487,6 +548,8 @@ class AzpWindow:
 
         self._style_title_to_id: dict[str, str] = {}
         self._style_id_to_title: dict[str, str] = {}
+        self._poll_interval_ms: int | None = poll_interval_ms
+        self._poll_after_id: str | None = None
         self._build_variables()
         self._build_ui()
         self._sync_widgets_from_settings()
@@ -494,6 +557,8 @@ class AzpWindow:
 
         if initial_search:
             self.perform_search("")
+
+        self._schedule_presentation_poll()
 
     def _build_variables(self) -> None:
         self.query_var = tk.StringVar(master=self.root, value="")
@@ -690,13 +755,52 @@ class AzpWindow:
 
     def _sync_widgets_from_settings(self) -> None:
         s = self.controller.settings
+        if s.style_id not in self._style_id_to_title:
+            self._style_title_to_id[s.style_id] = s.style_id
+            self._style_id_to_title[s.style_id] = s.style_id
+            style_values = list(self.style_combo.cget("values"))
+            if s.style_id not in style_values:
+                self.style_combo.configure(values=[*style_values, s.style_id])
         self.style_var.set(self._style_id_to_title[s.style_id])
         self.numbering_var.set(NUMBERING_LABELS[s.numbering_mode])
+        font_values = list(self.font_combo.cget("values"))
+        if s.font_name not in font_values:
+            self.font_combo.configure(values=sorted({*font_values, s.font_name}))
         self.font_name_var.set(s.font_name)
+        size_values = [int(v) for v in self.font_size_combo.cget("values")]
+        if s.font_size_pt not in size_values:
+            self.font_size_combo.configure(
+                values=[str(v) for v in sorted({*size_values, s.font_size_pt})]
+            )
         self.font_size_var.set(str(s.font_size_pt))
         self.footer_position_var.set(FOOTER_POSITION_LABELS[s.footer_position])
         self.footer_header_var.set(FOOTER_HEADER_LABELS[s.footer_header])
         self.always_on_top_var.set(s.always_on_top)
+
+    def _schedule_presentation_poll(self) -> None:
+        if self._poll_interval_ms is not None and self._poll_interval_ms > 0:
+            try:
+                self._poll_after_id = self.root.after(
+                    self._poll_interval_ms, self._on_presentation_poll
+                )
+            except tk.TclError:
+                self._poll_after_id = None
+
+    def _on_presentation_poll(self) -> None:
+        self._poll_after_id = None
+        try:
+            self.check_active_presentation()
+        except Exception:
+            pass
+        self._schedule_presentation_poll()
+
+    def check_active_presentation(self) -> bool:
+        """Sprawdza aktywną prezentację i synchronizuje kontrolki okienka po przełączeniu (D19)."""
+        changed = self.controller.sync_with_active_presentation()
+        if changed:
+            self._sync_widgets_from_settings()
+            self.status_var.set(self.controller.status_message)
+        return changed
 
     def _apply_topmost(self, enabled: bool) -> None:
         self.root.wm_attributes("-topmost", bool(enabled))
@@ -741,8 +845,7 @@ class AzpWindow:
 
     def _apply_setting_change(self, **changes: object) -> bool:
         ok = self.controller.update_settings(rebuild=True, **changes)
-        if not ok:
-            self._sync_widgets_from_settings()
+        self._sync_widgets_from_settings()
         self.status_var.set(self.controller.status_message)
         return ok
 
@@ -798,13 +901,17 @@ class AzpWindow:
 
     def cite_selected(self) -> bool:
         """Wstawia cytowanie dla zaznaczonych pozycji na liście wyników."""
+        self.check_active_presentation()
         ok = self.controller.cite_keys(self.get_selected_keys())
+        self._sync_widgets_from_settings()
         self.status_var.set(self.controller.status_message)
         return ok
 
     def refresh_presentation(self) -> bool:
         """Tworzy kopię zapasową i przebudowuje całą prezentację."""
+        self.check_active_presentation()
         ok = self.controller.refresh_presentation()
+        self._sync_widgets_from_settings()
         self.status_var.set(self.controller.status_message)
         return ok
 
@@ -875,6 +982,12 @@ class AzpWindow:
 
     def destroy(self) -> None:
         """Bezpiecznie zamyka okienko."""
+        if self._poll_after_id is not None:
+            try:
+                self.root.after_cancel(self._poll_after_id)
+            except tk.TclError:
+                pass
+            self._poll_after_id = None
         try:
             self.root.destroy()
         except tk.TclError:

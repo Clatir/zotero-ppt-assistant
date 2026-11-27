@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tkinter as tk
+from pathlib import Path
 from tkinter import font as tkfont
 
 import pytest
@@ -24,17 +25,6 @@ from azp.gui import (
 )
 from tests.fakes.fake_ppt import FakeSlideDoc
 from tests.fakes.fake_zotero import FakeZoteroSource
-
-
-@pytest.fixture(scope="module")
-def tk_root():
-    root = tk.Tk()
-    root.withdraw()
-    yield root
-    try:
-        root.destroy()
-    except tk.TclError:
-        pass
 
 
 def _make_window(
@@ -509,5 +499,179 @@ def test_missing_item_key_error_handled_gracefully_m1(tk_root: tk.Tk) -> None:
         )
         assert win.refresh_presentation() is False
         assert "MISSING999" in win.get_status_message() or "Nie znaleziono" in win.get_status_message()
+    finally:
+        win.destroy()
+
+
+# ---------------------------------------------------------------------------
+# C1: niezapisana prezentacja (D18) i śledzenie aktywnej prezentacji (D19)
+# ---------------------------------------------------------------------------
+
+
+class _MultiPresentationDoc:
+    """Atrapa kilku otwartych prezentacji; aktywną wybiera `activate(name)` (D19)."""
+
+    def __init__(self, docs: dict[str, FakeSlideDoc], active: str | None) -> None:
+        self.docs = docs
+        self.active = active
+
+    def activate(self, name: str | None) -> None:
+        self.active = name
+
+    def get_presentation_key(self) -> str | None:
+        return self.active
+
+    def _doc(self) -> FakeSlideDoc:
+        if self.active is None:
+            return FakeSlideDoc(slide_count=0, active_slide_index=None)
+        return self.docs[self.active]
+
+    def __getattr__(self, name: str):  # type: ignore[no-untyped-def]
+        return getattr(self._doc(), name)
+
+
+def test_c1_unsaved_presentation_blocks_rebuild_and_rolls_back_d18(tk_root: tk.Tk) -> None:
+    from azp.contracts import MSG_SAVE_BEFORE_REBUILD
+
+    rebuild_calls: list[Settings] = []
+
+    def on_rebuild(settings: Settings) -> str:
+        rebuild_calls.append(settings)
+        return "nie powinno się wywołać"
+
+    doc = FakeSlideDoc(presentation_path=None)
+    for callback in (None, on_rebuild):
+        win, _zot, doc = _make_window(
+            tk_root=tk_root, doc=FakeSlideDoc(presentation_path=None), on_rebuild=callback
+        )
+        try:
+            win.select_result_keys(["KOWAL2023"])
+            assert win.cite_selected() is True  # Cytuj działa normalnie
+            text_after_cite = doc.get_slide_body_text(1)
+
+            assert win.set_style(STYLE_APA) is False
+            assert win.get_status_message() == MSG_SAVE_BEFORE_REBUILD
+            assert win.controller.settings.style_id == STYLE_IEEE_V4
+            assert win.style_var.get() == "IEEE Praca Inzynierska Access Date v4"
+
+            assert win.refresh_presentation() is False
+            assert win.get_status_message() == MSG_SAVE_BEFORE_REBUILD
+            assert doc.get_slide_body_text(1) == text_after_cite
+            assert doc.backups_created == []
+        finally:
+            win.destroy()
+    assert rebuild_calls == []
+
+
+def test_c1_window_follows_active_presentation_settings_d19(tk_root: tk.Tk) -> None:
+    doc_a = FakeSlideDoc(presentation_path=Path("C:/fake/A.pptx"))
+    saved_a = Settings(style_id=STYLE_IEEE_V4, font_name="Arial", font_size_pt=12)
+    doc_a.save_settings(saved_a)
+    doc_b = FakeSlideDoc(presentation_path=Path("C:/fake/B.pptx"))
+    multi = _MultiPresentationDoc({"A": doc_a, "B": doc_b}, active="A")
+
+    win = AzpWindow(
+        zotero=FakeZoteroSource(),
+        slide_doc=multi,  # type: ignore[arg-type]
+        master=tk_root,
+        poll_interval_ms=None,
+    )
+    try:
+        assert win.controller.settings == saved_a
+        assert win.font_size_var.get() == "12"
+
+        # B nie ma ustawień AZP -> dostaje ustawienia widoczne w okienku
+        multi.activate("B")
+        win.check_active_presentation()
+        assert win.controller.settings == saved_a
+        assert win.set_style(STYLE_APA) is True
+        assert doc_b.load_settings() is not None
+        assert doc_b.load_settings().style_id == STYLE_APA
+        assert doc_a.load_settings() == saved_a  # A nietknięta
+
+        # Powrót do A: okienko wczytuje ustawienia A i odświeża listy
+        multi.activate("A")
+        win.check_active_presentation()
+        assert win.controller.settings.style_id == STYLE_IEEE_V4
+        assert win.style_var.get() == "IEEE Praca Inzynierska Access Date v4"
+        assert win.font_name_var.get() == "Arial"
+        assert "A" in win.get_status_message()
+
+        # Przełączenie bez odpytywania: Cytuj sam sprawdza aktywną prezentację
+        multi.activate("B")
+        win.select_result_keys(["KOWAL2023"])
+        assert win.cite_selected() is True
+        assert doc_b.read_slides()[0].citations[0].text == "(Kowalski, 2023)"
+        assert win.style_var.get() == "APA Style 7th edition"
+
+        # „Zawsze na wierzchu” to opcja okienka, nie prezentacji – nie zmienia się przy przełączeniu
+        win.set_always_on_top(False)
+        multi.activate("A")
+        win.check_active_presentation()
+        assert win.controller.settings.always_on_top is False
+        assert win.always_on_top_var.get() is False
+
+        # Zamknięcie wszystkich prezentacji nie zmienia ustawień w okienku
+        multi.activate(None)
+        win.check_active_presentation()
+        assert win.controller.settings.style_id == STYLE_IEEE_V4
+    finally:
+        win.destroy()
+
+
+def test_c1_unknown_style_in_presentation_does_not_crash_window_d19(tk_root: tk.Tk) -> None:
+    doc_a = FakeSlideDoc(presentation_path=Path("C:/fake/A.pptx"))
+    doc_b = FakeSlideDoc(presentation_path=Path("C:/fake/B.pptx"))
+    doc_b.save_settings(Settings(style_id="http://www.zotero.org/styles/nieznany"))
+    multi = _MultiPresentationDoc({"A": doc_a, "B": doc_b}, active="A")
+    win = AzpWindow(
+        zotero=FakeZoteroSource(),
+        slide_doc=multi,  # type: ignore[arg-type]
+        master=tk_root,
+        poll_interval_ms=None,
+    )
+    try:
+        multi.activate("B")
+        win.check_active_presentation()
+        assert win.controller.settings.style_id == "http://www.zotero.org/styles/nieznany"
+        assert win.style_var.get() == "http://www.zotero.org/styles/nieznany"
+    finally:
+        win.destroy()
+
+
+
+def test_c1_m1_setting_change_or_refresh_right_after_presentation_switch_syncs_d19(
+    tk_root: tk.Tk,
+) -> None:
+    """M1 (C1): zmiana ustawienia lub refresh bez uprzedniego timera synchronizuje wszystkie kontrolki."""
+    doc_a = FakeSlideDoc(presentation_path=Path("C:/fake/A.pptx"))
+    doc_a.save_settings(
+        Settings(style_id=STYLE_IEEE_V4, font_name="Calibri", font_size_pt=10)
+    )
+    doc_b = FakeSlideDoc(presentation_path=Path("C:/fake/B.pptx"))
+    doc_b.save_settings(
+        Settings(style_id=STYLE_IEEE_V4, font_name="Arial", font_size_pt=14)
+    )
+    multi = _MultiPresentationDoc({"A": doc_a, "B": doc_b}, active="A")
+
+    win = AzpWindow(
+        zotero=FakeZoteroSource(),
+        slide_doc=multi,  # type: ignore[arg-type]
+        master=tk_root,
+        poll_interval_ms=None,
+    )
+    try:
+        # 1) Przełączenie na B i zmiana stylu przed wywołaniem check_active_presentation()
+        multi.activate("B")
+        assert win.set_style(STYLE_APA) is True
+        win.check_active_presentation()
+        assert win.font_name_var.get() == "Arial"
+        assert win.font_size_var.get() == "14"
+
+        # 2) Bezpośrednie controller.refresh_presentation() po przełączeniu na A wczytuje ustawienia A
+        multi.activate("A")
+        assert win.controller.refresh_presentation() is True
+        assert win.controller.settings.style_id == STYLE_IEEE_V4
+        assert win.controller.settings.font_name == "Calibri"
     finally:
         win.destroy()

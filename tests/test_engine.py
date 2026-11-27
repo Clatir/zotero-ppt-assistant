@@ -682,3 +682,43 @@ def test_m3_callbacks_convert_key_error_to_azp_error() -> None:
     with pytest.raises(AzpError, match="Nie znaleziono opisu pozycji w Zotero"):
         on_rebuild(settings)
 
+
+
+# ---------------------------------------------------------------------------
+# C1: niezapisana prezentacja – brak przebudowy bez kopii zapasowej (D18)
+# ---------------------------------------------------------------------------
+
+
+def test_c1_rebuild_unsaved_presentation_refuses_without_any_change_d18() -> None:
+    """D18: bez pliku nie da się zrobić kopii -> przebudowa nie zmienia niczego; cytowanie działa."""
+    from azp.contracts import MSG_SAVE_BEFORE_REBUILD, BackupError
+
+    zotero = FakeZoteroSource()
+    doc = FakeSlideDoc(slide_count=2, active_slide_index=1, has_cursor=True, presentation_path=None)
+    engine = CitationEngine(zotero, doc)
+
+    # Cytowanie działa normalnie (bez kopii zapasowej)
+    engine.cite(["KOWAL2023"])
+    assert doc.get_slide_body_text(1) == "Tekst slajdu 1 [1]"
+    slides_before = doc.read_slides()
+    settings_before = doc.load_settings()
+
+    apa = Settings(style_id=STYLE_APA)
+    with pytest.raises(BackupError) as exc_info:
+        engine.apply_settings(apa)
+    assert str(exc_info.value) == MSG_SAVE_BEFORE_REBUILD
+    with pytest.raises(BackupError):
+        engine.rebuild()
+
+    assert doc.read_slides() == slides_before
+    assert doc.load_settings() == settings_before
+    assert doc.backups_created == []
+
+    # Komunikat trafia do okienka przez callback jako AzpError z tym samym tekstem
+    with pytest.raises(AzpError) as cb_exc:
+        engine.make_rebuild_callback()(apa)
+    assert str(cb_exc.value) == MSG_SAVE_BEFORE_REBUILD
+
+    # Przebudowa bez kopii na wyraźne żądanie kodu (create_backup=False) nadal możliwa
+    engine.rebuild(settings=apa, create_backup=False)
+    assert doc.get_slide_body_text(1) != "Tekst slajdu 1 [1]"

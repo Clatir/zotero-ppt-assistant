@@ -28,10 +28,14 @@ Nie przechodzi, gdy.
   - *Jak sprawdzić:* uruchom `python -m pytest -q tests/test_gui.py`.
   - *Oczekiwany efekt:* 16 testów przechodzi (`16 passed`); wyszukiwarka, wielokrotny wybór wyników (Ctrl/Shift – D13), blokada *Cytuj* bez kursora w polu tekstowym (D10), lista czcionek z systemu (D5), 3 położenia pola źródeł i przełącznik nagłówka „Źródła:” (D9), natychmiastowa przebudowa prezentacji z kopią zapasową `.bak.pptx` po zmianie ustawień (D14) wraz z wycofaniem wyboru przy błędzie Zotero oraz opcja „Zawsze na wierzchu” działają poprawnie.
   - *Nie przechodzi, gdy:* którykolwiek z 16 testów w `tests/test_gui.py` zgłasza błąd.
-- **B2.2 Silnik numeracji i stylów (`azp.engine`)** – **Automatycznie:** `tests/test_engine.py` (20 testów czystych funkcji i `CitationEngine`)
+- **B2.2 Silnik numeracji i stylów (`azp.engine`)** – **Automatycznie:** `tests/test_engine.py` (21 testów czystych funkcji i `CitationEngine`)
   - *Jak sprawdzić:* uruchom `python -m pytest -q tests/test_engine.py`.
-  - *Oczekiwany efekt:* 20 testów przechodzi (`20 passed`); numeracja IEEE globalnie i per slajd (D4), ten sam numer dla powtórzeń, cytowania zbiorcze i automatyczne scalanie sąsiednich cytowań przy kursorze (`[1, 2]` oraz `(Autor1; Autor2)` – D13), alfabetyczne sortowanie stopki w stylu APA 7 (D3), blokada bez kursora (D10) oraz natychmiastowa przebudowa z kopią zapasową `.bak.pptx` po zmianie ustawień lub kolejności slajdów (D14) działają poprawnie.
-  - *Nie przechodzi, gdy:* którykolwiek z 20 testów w `tests/test_engine.py` zgłasza błąd.
+  - *Oczekiwany efekt:* 21 testów przechodzi (`21 passed`); numeracja IEEE globalnie i per slajd (D4), ten sam numer dla powtórzeń, cytowania zbiorcze i automatyczne scalanie sąsiednich cytowań przy kursorze (`[1, 2]` oraz `(Autor1; Autor2)` – D13), alfabetyczne sortowanie stopki w stylu APA 7 (D3), blokada bez kursora (D10), blokada przebudowy niezapisanej prezentacji (D18) oraz natychmiastowa przebudowa z kopią zapasową `.bak.pptx` po zmianie ustawień lub kolejności slajdów (D14) działają poprawnie.
+  - *Nie przechodzi, gdy:* którykolwiek z 21 testów w `tests/test_engine.py` zgłasza błąd.
+- **C1.1 Integracja okienka z prawdziwym PowerPointem i Zotero (`azp.main`, `python -m azp`)** – **Automatycznie:** `tests/test_main.py` (4 testy jednostkowe + 1 test końcowy COM `@pytest.mark.com`), `tests/test_ppt.py` (25 testów jednostkowych + 1 test COM), `tests/test_gui.py` (20 testów)
+  - *Jak sprawdzić:* przy włączonym Zotero 10 i zamkniętym PowerPoincie uruchom `python -m pytest -q` oraz `python -m pytest -q -m com`.
+  - *Oczekiwany efekt:* przechodzą wszystkie testy bez COM (`107 passed`) oraz wszystkie testy COM (`3 passed`); sprawdzane są: zachowanie formatowania tekstu użytkownika na slajdzie przy wstawianiu, scalaniu i przenumerowaniu cytowań (T10), kopia zapasowa przez `SaveCopyAs` bez zapisu oryginalnego pliku użytkownika (D17), odmowa przebudowy niezapisanej prezentacji z komunikatem „Zapisz prezentację, żeby można było zrobić kopię zapasową.” i wycofaniem zmiany na liście (D18), śledzenie ustawień aktywnej prezentacji przy przełączaniu między plikami (D19) oraz powrót fokusu i kursora za wstawionym cytowaniem po *Cytuj* (D20).
+  - *Nie przechodzi, gdy:* Zotero 10 jest wyłączone, PowerPoint użytkownika jest otwarty przed testami COM albo którykolwiek test zgłasza błąd.
 
 ## Wszystkie punkty
 - A1.1 Odpowiedź lokalnego API Zotero dla stylów IEEE v4 i APA
@@ -41,3 +45,4 @@ Nie przechodzi, gdy.
 - B2.1 Warstwa COM PowerPoint (`PowerPointSlideDoc`)
 - B1.2 Okienko GUI (`AzpWindow` / `AzpController`)
 - B2.2 Silnik numeracji i stylów (`azp.engine`)
+- C1.1 Integracja okienka z prawdziwym PowerPointem i Zotero (`azp.main`, `python -m azp`)

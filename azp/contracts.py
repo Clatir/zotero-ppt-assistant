@@ -39,6 +39,13 @@ class NoTextCursorError(AzpError):
     """Kursor nie znajduje się w polu tekstowym na slajdzie (D10)."""
 
 
+MSG_SAVE_BEFORE_REBUILD = "Zapisz prezentację, żeby można było zrobić kopię zapasową."
+
+
+class BackupError(AzpError):
+    """Nie można zrobić kopii zapasowej przed przebudową – przebudowa nie jest wykonywana (D17, D18)."""
+
+
 @dataclass(frozen=True)
 class TextSpan:
     """Fragment tekstu z informacją o formatowaniu (T4: kursywa z CSL HTML)."""

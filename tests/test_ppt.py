@@ -40,6 +40,15 @@ from azp.ppt import (
     serialize_footer_entries,
     serialize_settings,
 )
+from azp.contracts import BackupError
+from azp.ppt.com_doc import (
+    TextEdit,
+    apply_text_edits,
+    choose_powerpoint_window,
+    plan_citation_insert,
+    plan_citation_replacements,
+)
+from tests.fakes.fake_com import MockPresentation, MockShape, MockSlide, MockTextRange
 
 TEST_PPTX_PATH = Path(__file__).resolve().parent / "data" / "test_ppt_b21.pptx"
 
@@ -314,7 +323,7 @@ def test_active_window_selection_mode_with_mock_com_objects() -> None:
 
     class _MockTextFrame:
         def __init__(self, text: str) -> None:
-            self.TextRange = _MockTextRange(text)
+            self.TextRange = MockTextRange(text)
 
     class _MockShape:
         def __init__(self, text: str) -> None:
@@ -461,7 +470,7 @@ def test_h2_multiple_text_shapes_on_single_slide_isolation_and_ordering() -> Non
 
     class _MockTextFrame:
         def __init__(self, text: str) -> None:
-            self.TextRange = _MockTextRange(text)
+            self.TextRange = MockTextRange(text)
 
     class _MockShape:
         def __init__(self, name: str, text: str) -> None:
@@ -646,6 +655,333 @@ def test_m2_build_footer_text_normalizes_crlf_and_lf_inside_spans() -> None:
     assert len(italic_ranges) == 1
     r = italic_ranges[0]
     assert full_text[r.start - 1 : r.start - 1 + r.length] == "Kursywa\rDruga"
+
+
+# ---------------------------------------------------------------------------
+# C1: edycje tylko w obrębie cytowań (T10), kopia SaveCopyAs (D17), klucz prezentacji (D19),
+# powrót do okna PowerPointa (D20)
+# ---------------------------------------------------------------------------
+
+
+def test_c1_plan_citation_insert_returns_minimal_edit() -> None:
+    """Wstawienie i scalenie są opisane jedną małą edycją, zgodną z dotychczasowym wynikiem tekstu."""
+    c1 = Citation(citation_id="c1", keys=("K1",), text="[1]")
+    c2 = Citation(citation_id="c2", keys=("K2",), text="[2]")
+
+    text = "Alfa Beta Gamma"
+    edit, cits, pos = plan_citation_insert(text, len("Alfa Beta"), c1, [])
+    assert edit == TextEdit(start=len("Alfa Beta"), length=0, new_text=" [1]")
+    assert apply_text_edits(text, [edit]) == "Alfa Beta [1] Gamma"
+    assert cits == [c1]
+    assert pos == len("Alfa Beta [1]")
+
+    text2 = "Alfa Beta [1] Gamma"
+    edit2, cits2, pos2 = plan_citation_insert(text2, len("Alfa Beta [1]"), c2, [c1])
+    assert edit2 == TextEdit(start=len("Alfa Beta "), length=3, new_text="[1, 2]")
+    assert apply_text_edits(text2, [edit2]) == "Alfa Beta [1, 2] Gamma"
+    assert cits2 == [Citation(citation_id="c1", keys=("K1", "K2"), text="[1, 2]")]
+    assert pos2 == len("Alfa Beta [1, 2]")
+
+    # Zgodność z dotychczasową funkcją tekstową
+    assert apply_citation_at_cursor_in_text(text2, len("Alfa Beta [1]"), c2, [c1]) == (
+        "Alfa Beta [1, 2] Gamma",
+        cits2,
+        pos2,
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "old", "new"),
+    [
+        (
+            "A [1] oraz B [1]",
+            [Citation("a", ("K1",), "[1]"), Citation("b", ("K2",), "[1]")],
+            [Citation("a", ("K1",), "[1]"), Citation("b", ("K2",), "[2]")],
+        ),
+        (
+            "A [1] oraz B [2] i C [1]",
+            [
+                Citation("a", ("K1",), "[1]"),
+                Citation("b", ("K2",), "[2]"),
+                Citation("c", ("K1",), "[1]"),
+            ],
+            [
+                Citation("a", ("K1",), "[2]"),
+                Citation("b", ("K2",), "[1]"),
+                Citation("c", ("K1",), "[2]"),
+            ],
+        ),
+        (
+            "Tekst [1, 2] dalej",
+            [Citation("a", ("K1", "K2"), "[1, 2]")],
+            [Citation("a", ("K1", "K2"), "(Kowalski, 2023; Nowak, 2024)")],
+        ),
+        (
+            "Bez zmian [1]",
+            [Citation("a", ("K1",), "[1]")],
+            [Citation("a", ("K1",), "[1]")],
+        ),
+        (
+            "Usunięty ręcznie tekst",
+            [Citation("a", ("K1",), "[1]")],
+            [Citation("a", ("K1",), "[2]")],
+        ),
+    ],
+)
+def test_c1_plan_citation_replacements_matches_two_pass_replacement(
+    text: str, old: list[Citation], new: list[Citation]
+) -> None:
+    """Edycje cytowań dają ten sam tekst co dwuprzebiegowa podmiana, nie dotykając tekstu między nimi."""
+    edits = plan_citation_replacements(text, old, new)
+    assert apply_text_edits(text, edits) == replace_citations_in_text(text, old, new)
+    # Edycje są rozłączne, posortowane malejąco (można je stosować od końca bez przeliczania)
+    starts = [e.start for e in edits]
+    assert starts == sorted(starts, reverse=True)
+    for e in edits:
+        assert text[e.start : e.start + e.length] in {c.text for c in old}
+        assert e.new_text != text[e.start : e.start + e.length]
+
+
+def _mock_doc_with_shape(text: str) -> tuple[PowerPointSlideDoc, MockShape, MockPresentation]:
+    shape = MockShape("Body", text)
+    slide = MockSlide([shape])
+    pres = MockPresentation([slide])
+    doc = PowerPointSlideDoc(presentation=pres, active_slide_index=1)
+    return doc, shape, pres
+
+
+def test_c1_insert_and_renumber_do_not_overwrite_whole_shape_text_t10() -> None:
+    """T10: wstawienie, scalenie i przenumerowanie zmieniają tylko zakres cytowania (formatowanie zostaje)."""
+    doc, shape, _ = _mock_doc_with_shape("Alfa Beta Gamma\rDrugi akapit")
+    tr = shape.TextFrame.TextRange
+
+    doc.set_cursor_target(1, "Body", len("Alfa Beta"))
+    doc.insert_citation_at_cursor(Citation("c1", ("K1",), "[1]"))
+    assert tr.Text == "Alfa Beta [1] Gamma\rDrugi akapit"
+
+    doc.set_cursor_target(1, "Body", None)
+    doc.insert_citation_at_cursor(Citation("c2", ("K2",), "[1]"))
+    assert tr.Text == "Alfa Beta [1] Gamma\rDrugi akapit [1]"
+
+    doc.update_slide_citations(
+        1, [Citation("c1", ("K1",), "[2]"), Citation("c2", ("K2",), "[1]")]
+    )
+    assert tr.Text == "Alfa Beta [2] Gamma\rDrugi akapit [1]"
+
+    doc.set_cursor_target(1, "Body", len("Alfa Beta [2]"))
+    doc.insert_citation_at_cursor(Citation("c3", ("K3",), "[3]"))
+    assert tr.Text == "Alfa Beta [2, 3] Gamma\rDrugi akapit [1]"
+
+    assert tr.whole_text_assignments == 0
+    for start, length, new_text in tr.edits:
+        assert length in (0, 3)
+        assert new_text in {" [1]", "[1]", "[2]", "[2, 3]"}
+
+
+def test_c1_insert_in_selection_mode_places_caret_after_citation() -> None:
+    """Tryb z oknem: po wstawieniu kursor (Select) stoi tuż za cytowaniem."""
+    doc, shape, pres = _mock_doc_with_shape("Alfa Beta Gamma")
+    tr = shape.TextFrame.TextRange
+
+    class _Sel:
+        Type = PP_SELECTION_TEXT
+        TextRange = MockTextRange("", start=len("Alfa Beta") + 1)
+
+        def ShapeRange(self, idx: int) -> MockShape:
+            return shape
+
+        def SlideRange(self, idx: int):  # type: ignore[no-untyped-def]
+            return pres.Slides(1)
+
+    class _Win:
+        Selection = _Sel()
+
+    class _App:
+        ActiveWindow = _Win()
+        ActivePresentation = pres
+
+        class Presentations:
+            Count = 1
+
+    doc = PowerPointSlideDoc(app=_App(), presentation=pres)
+    doc.insert_citation_at_cursor(Citation("c1", ("K1",), "[1]"))
+    assert tr.Text == "Alfa Beta [1] Gamma"
+    assert tr.selected_at == len("Alfa Beta [1]") + 1
+    assert tr.whole_text_assignments == 0
+
+
+def test_c1_create_backup_uses_save_copy_as_without_saving_original_d17() -> None:
+    """D17: kopia przez SaveCopyAs obok pliku; oryginał nie jest zapisywany (brak Save)."""
+    shape = MockShape("Body", "Tekst")
+    pres = MockPresentation(
+        [MockSlide([shape])],
+        full_name="C:\\Prace\\Wyklad.pptx",
+        path="C:\\Prace",
+    )
+    doc = PowerPointSlideDoc(presentation=pres, active_slide_index=1)
+
+    backup = doc.create_backup()
+    assert backup == Path("C:\\Prace\\Wyklad.bak.pptx")
+    assert pres.save_copy_as_calls == ["C:\\Prace\\Wyklad.bak.pptx"]
+    assert pres.save_calls == 0
+
+    # Plik z makrami: kopia zachowuje rozszerzenie (.bak.pptm), żeby dało się ją otworzyć
+    pres_m = MockPresentation(
+        [MockSlide([MockShape("Body", "x")])],
+        full_name="C:\\Prace\\Makra.pptm",
+        path="C:\\Prace",
+    )
+    assert PowerPointSlideDoc(presentation=pres_m).create_backup() == Path(
+        "C:\\Prace\\Makra.bak.pptm"
+    )
+
+    # Niezapisana prezentacja: brak kopii (silnik i okienko blokują przebudowę – D18)
+    pres_new = MockPresentation([MockSlide([MockShape("Body", "x")])])
+    assert PowerPointSlideDoc(presentation=pres_new).create_backup() is None
+    assert pres_new.save_copy_as_calls == []
+
+
+def test_c1_create_backup_failure_raises_backup_error() -> None:
+    """Błąd SaveCopyAs (np. brak uprawnień) -> `BackupError`, a nie surowy błąd COM."""
+    pres = MockPresentation(
+        [MockSlide([MockShape("Body", "x")])],
+        full_name="C:\\Prace\\Wyklad.pptx",
+        path="C:\\Prace",
+    )
+    pres.save_copy_as_error = RuntimeError("Access denied")
+    doc = PowerPointSlideDoc(presentation=pres)
+    with pytest.raises(BackupError):
+        doc.create_backup()
+
+
+def test_c1_presentation_key_identifies_active_presentation_d19() -> None:
+    """D19: klucz aktywnej prezentacji (FullName) odróżnia także dwie niezapisane prezentacje."""
+    pres1 = MockPresentation([MockSlide([MockShape("Body", "x")])], full_name="Prezentacja1")
+    pres2 = MockPresentation([MockSlide([MockShape("Body", "y")])], full_name="Prezentacja2")
+
+    class _App:
+        ActivePresentation = pres1
+
+        class Presentations:
+            Count = 2
+
+    app = _App()
+    doc = PowerPointSlideDoc(app=app)
+    assert doc.get_presentation_key() == "Prezentacja1"
+    app.ActivePresentation = pres2
+    assert doc.get_presentation_key() == "Prezentacja2"
+
+    class _NoPres:
+        class Presentations:
+            Count = 0
+
+    assert PowerPointSlideDoc(app=_NoPres()).get_presentation_key() is None
+
+
+def test_c1_choose_powerpoint_window_prefers_presentation_caption_d20() -> None:
+    """D20: wybór okna PowerPointa do przywrócenia fokusu – najpierw to z nazwą prezentacji."""
+    windows = [
+        (101, "Inna.pptx - PowerPoint"),
+        (202, "Wyklad.pptx - PowerPoint"),
+        (303, ""),
+    ]
+    assert choose_powerpoint_window(windows, "Wyklad.pptx") == 202
+    # Eksplorator może ukrywać rozszerzenia – dopasowanie po nazwie bez rozszerzenia
+    assert choose_powerpoint_window([(7, "Wyklad - PowerPoint")], "Wyklad.pptx") == 7
+    # Brak dopasowania: pierwsze okno z tytułem
+    assert choose_powerpoint_window(windows, "Brak.pptx") == 101
+    assert choose_powerpoint_window([], "Wyklad.pptx") is None
+
+
+def test_c1_h1_choose_powerpoint_window_ignores_azp_own_window_d20() -> None:
+    """H1 (C1): okno AZP („Asystent Zotero dla PowerPointa”) nie może być wybrane zamiast PowerPointa."""
+    windows = [
+        (999, "Asystent Zotero dla PowerPointa"),
+        (202, "Zotero.pptx - PowerPoint"),
+    ]
+    assert choose_powerpoint_window(windows, "Zotero.pptx") == 202
+    assert choose_powerpoint_window(windows, "Inna.pptx") == 202
+    assert choose_powerpoint_window(windows, "") == 202
+    assert (
+        choose_powerpoint_window(
+            [(999, "Asystent Zotero dla PowerPointa")], "Zotero.pptx"
+        )
+        is None
+    )
+
+
+def test_c1_h2_cite_before_existing_citations_keeps_cursor_after_updated_citation_d20() -> None:
+    """H2 (C1): po przenumerowaniu podczas cite() kursor przesuwa się o zmianę długości cytowania."""
+    shape = MockShape("Body", "Wstęp.Zdanie [1, 2, 3, 4, 5, 6, 7, 8, 9]")
+    slide = MockSlide([shape])
+    pres = MockPresentation([slide])
+    doc = PowerPointSlideDoc(presentation=pres, active_slide_index=1)
+
+    c_tail = Citation(
+        citation_id="c-tail",
+        keys=tuple(f"K{i}" for i in range(1, 10)),
+        text="[1, 2, 3, 4, 5, 6, 7, 8, 9]",
+    )
+    doc.set_cursor_target(1, "Body", len("Wstęp.Zdanie [1, 2, 3, 4, 5, 6, 7, 8, 9]"))
+    # Zapisz istniejące cytowanie na końcu tekstu
+    shape.Tags.Add("AZP_CITATIONS", serialize_citations([c_tail]))
+    slide.Tags.Add("AZP_CITATIONS", serialize_citations([c_tail]))
+
+    # Stawiamy kursor po "Wstęp." (przed "Zdanie")
+    doc.set_cursor_target(1, "Body", len("Wstęp."))
+    # Krok 1 w cite(): insert_citation_at_cursor wstawia tymczasowe "[10]" (długość 4)
+    doc.insert_citation_at_cursor(Citation("c-head", ("K10",), "[10]"))
+    assert (
+        shape.TextFrame.TextRange.Text
+        == "Wstęp. [10]Zdanie [1, 2, 3, 4, 5, 6, 7, 8, 9]"
+    )
+    # Krok 2 w cite(): update_slide_citations zamienia "[10]" -> "[1]" (długość 3)
+    doc.update_slide_citations(
+        1,
+        [
+            Citation("c-head", ("K10",), "[1]"),
+            Citation(
+                "c-tail",
+                tuple(f"K{i}" for i in range(1, 10)),
+                "[2, 3, 4, 5, 6, 7, 8, 9, 10]",
+            ),
+        ],
+    )
+    assert (
+        shape.TextFrame.TextRange.Text
+        == "Wstęp. [1]Zdanie [2, 3, 4, 5, 6, 7, 8, 9, 10]"
+    )
+
+    # Kursor musi stać tuż za "[1]", więc kolejne wstawienie scala z c-head zamiast trafić w środek "Zdanie"
+    assert doc.get_adjacent_citation_at_cursor() == Citation("c-head", ("K10",), "[1]")
+    doc.insert_citation_at_cursor(Citation("c-head", ("K10", "K11"), "[1, 2]"))
+    assert (
+        shape.TextFrame.TextRange.Text
+        == "Wstęp. [1, 2]Zdanie [2, 3, 4, 5, 6, 7, 8, 9, 10]"
+    )
+
+    # M2 (runda 2): dwie edycje przed/na kursorze w tym samym kształcie (współrzędne względem old_t)
+    shape2 = MockShape("Body2", "A [1, 2] BKoniec")
+    slide2 = MockSlide([shape2])
+    pres2 = MockPresentation([slide2])
+    doc2 = PowerPointSlideDoc(presentation=pres2, active_slide_index=1)
+    c_first = Citation("c1", ("K1",), "[1, 2]")
+    shape2.Tags.Add("AZP_CITATIONS", serialize_citations([c_first]))
+    slide2.Tags.Add("AZP_CITATIONS", serialize_citations([c_first]))
+
+    doc2.set_cursor_target(1, "Body2", len("A [1, 2] B"))
+    doc2.insert_citation_at_cursor(Citation("c2", ("K2",), "[10]"))
+    assert shape2.TextFrame.TextRange.Text == "A [1, 2] B [10]Koniec"
+
+    doc2.update_slide_citations(
+        1,
+        [
+            Citation("c1", ("K1",), "[1]"),
+            Citation("c2", ("K2",), "[2]"),
+        ],
+    )
+    assert shape2.TextFrame.TextRange.Text == "A [1] B [2]Koniec"
+    assert doc2.get_adjacent_citation_at_cursor() == Citation("c2", ("K2",), "[2]")
 
 
 # ---------------------------------------------------------------------------
@@ -930,7 +1266,16 @@ def test_powerpoint_com_b21_full_workflow() -> None:
                 app.Quit()
             except Exception:
                 pass
+        app = None
+        import gc
+        import time
+
+        gc.collect()
         pythoncom.CoUninitialize()
+        for _ in range(25):
+            if not _is_powerpoint_running():
+                break
+            time.sleep(0.2)
         if backup_expected_path.exists():
             try:
                 backup_expected_path.unlink()

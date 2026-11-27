@@ -7,7 +7,9 @@ from typing import Callable, Sequence
 import uuid
 
 from azp.contracts import (
+    MSG_SAVE_BEFORE_REBUILD,
     AzpError,
+    BackupError,
     Citation,
     NoActiveSlideError,
     NoTextCursorError,
@@ -217,6 +219,9 @@ class CitationEngine:
                 "Brak otwartej prezentacji lub aktywnego slajdu w PowerPoincie."
             )
 
+        if create_backup and self.slide_doc.get_presentation_path() is None:
+            raise BackupError(MSG_SAVE_BEFORE_REBUILD)
+
         effective_settings = self._resolve_settings(settings)
         slides = self.slide_doc.read_slides()
 
@@ -235,6 +240,8 @@ class CitationEngine:
 
         if create_backup:
             self.last_backup_path = self.slide_doc.create_backup()
+            if self.last_backup_path is None:
+                raise BackupError(MSG_SAVE_BEFORE_REBUILD)
         else:
             self.last_backup_path = None
 
