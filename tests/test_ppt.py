@@ -984,6 +984,151 @@ def test_c1_h2_cite_before_existing_citations_keeps_cursor_after_updated_citatio
     assert doc2.get_adjacent_citation_at_cursor() == Citation("c2", ("K2",), "[2]")
 
 
+def test_manual_deletion_and_reordering_of_citations_in_slide_text_prunes_ghosts() -> None:
+    """Usunięcie cytowania z tekstu slajdu (Backspace) lub przeklejenie kolejności aktualizuje odczyt slajdu."""
+    sh1 = MockShape("Shape1", "Pierwsze [1] oraz drugie [2]")
+    sh2 = MockShape("Shape2", "Trzecie [3]")
+    slide = MockSlide([sh1, sh2])
+    pres = MockPresentation([slide])
+    doc = PowerPointSlideDoc(presentation=pres, active_slide_index=1)
+
+    c1 = Citation("c1", ("K1",), "[1]")
+    c2 = Citation("c2", ("K2",), "[2]")
+    c3 = Citation("c3", ("K3",), "[3]")
+    sh1.Tags.Add("AZP_CITATIONS", serialize_citations([c1, c2]))
+    sh2.Tags.Add("AZP_CITATIONS", serialize_citations([c3]))
+    slide.Tags.Add("AZP_CITATIONS", serialize_citations([c1, c2, c3]))
+
+    # 1. Użytkownik ręcznie usuwa "[1]" z tekstu Shape1
+    sh1.TextFrame.TextRange.Text = "Pierwsze oraz drugie [2]"
+    slides_after_del = doc.read_slides()
+    assert slides_after_del[0].citations == (c2, c3)
+
+    # 2. Użytkownik usuwa tekst "[3]" z Shape2 -> nie może on zostać doklejony do Shape1!
+    sh2.TextFrame.TextRange.Text = "Trzecie bez cytowania"
+    assert doc.read_slides()[0].citations == (c2,)
+
+    # 3. Użytkownik przekleja zdania w Shape1 tak, że [2] jest po [1] lub odwrotnie
+    sh1.TextFrame.TextRange.Text = "Najpierw [2], potem [1]"
+    sh1.Tags.Add("AZP_CITATIONS", serialize_citations([c1, c2]))
+    assert doc.read_slides()[0].citations == (c2, c1)
+
+
+def test_corrupted_tags_deserialization_does_not_crash() -> None:
+    """Uszkodzony JSON lub błędne typy w tagach AZP_* zwracają puste wartości zamiast wyjątku."""
+    assert deserialize_citations("{uszkodzony") == ()
+    assert deserialize_citations('[{"citation_id": "c1", "keys": [""]}]') == ()
+    assert deserialize_footer_entries("{uszkodzony") == ()
+    assert deserialize_footer_entries('[{"key": "K1", "spans": "nie-lista"}]') == ()
+    assert deserialize_settings("{uszkodzony") is None
+    assert deserialize_settings('{"font_size_pt": 999}') is None
+
+
+def test_cursor_in_grouped_shape_table_and_notes_pane_filtering() -> None:
+    """Kursor w zgrupowanym kształcie i tabeli jest wykrywany, a panel notatek prelegenta jest odrzucany."""
+    child_shape = MockShape("ChildText", "Tekst w grupie")
+
+    class _GroupItems:
+        Count = 1
+
+        def __call__(self, idx: int) -> MockShape:
+            return child_shape
+
+    class _GroupShape:
+        Name = "Group1"
+        HasTextFrame = 0
+        Tags = child_shape.Tags
+        GroupItems = _GroupItems()
+
+    slide = MockSlide([_GroupShape()])  # type: ignore[list-item]
+    pres = MockPresentation([slide])
+
+    class _Sel:
+        Type = PP_SELECTION_TEXT
+        HasChildShapeRange = -1
+        TextRange = MockTextRange("", start=len("Tekst w grupie") + 1)
+
+        def ChildShapeRange(self, idx: int) -> MockShape:
+            return child_shape
+
+        def ShapeRange(self, idx: int) -> _GroupShape:
+            return _GroupShape()
+
+        def SlideRange(self, idx: int) -> MockSlide:
+            return slide
+
+    class _Pane:
+        ViewType = 1  # ppViewSlide
+
+    class _Win:
+        Selection = _Sel()
+        ActivePane = _Pane()
+
+    class _App:
+        ActiveWindow = _Win()
+        ActivePresentation = pres
+
+        class Presentations:
+            Count = 1
+
+    doc = PowerPointSlideDoc(app=_App(), presentation=pres)
+    assert doc.has_text_cursor() is True
+    doc.insert_citation_at_cursor(Citation("cg", ("K1",), "[1]"))
+    assert child_shape.TextFrame.TextRange.Text == "Tekst w grupie [1]"
+
+    # Gdy aktywny jest panel notatek prelegenta (ppViewNotesPage = 3), kursor jest odrzucany
+    _Pane.ViewType = 3
+    assert doc.has_text_cursor() is False
+
+
+def test_powerpoint_addin_ppam_and_vbs_builder(tmp_path: Path) -> None:
+    """Budowanie i instalacja dodatku `.ppam` na wstążkę PowerPointa tworzy poprawny pakiet OpenXML."""
+    import zipfile
+    from azp.ppt import (
+        ADDIN_FILENAME,
+        build_ppam_addin,
+        build_vbs_launcher,
+        install_powerpoint_addin,
+        is_powerpoint_addin_installed,
+        uninstall_powerpoint_addin,
+    )
+
+    addin_dir = tmp_path / "AddIns"
+    appdata_dir = tmp_path / "AsystentZotero"
+    ppam_path = install_powerpoint_addin(
+        addin_dir=addin_dir,
+        appdata_dir=appdata_dir,
+        register_hkcu=False,
+    )
+    assert ppam_path == addin_dir / ADDIN_FILENAME
+    assert ppam_path.is_file()
+    assert is_powerpoint_addin_installed(addin_dir=addin_dir, check_hkcu=False) is True
+    assert (appdata_dir / "launch_azp.vbs").is_file()
+    assert "start_azp.pyw" in (appdata_dir / "launch_azp.vbs").read_text(encoding="utf-8")
+
+    with zipfile.ZipFile(ppam_path, "r") as zf:
+        names = set(zf.namelist())
+        assert {
+            "[Content_Types].xml",
+            "_rels/.rels",
+            "ppt/presentation.xml",
+            "ppt/_rels/presentation.xml.rels",
+            "ppt/vbaProject.bin",
+            "customUI/customUI.xml",
+            "customUI/customUI14.xml",
+        }.issubset(names)
+        ui14 = zf.read("customUI/customUI14.xml").decode("utf-8")
+        assert 'idMso="TabAddIns"' in ui14
+        assert 'onAction="OnLaunchAzp"' in ui14
+
+    uninstall_powerpoint_addin(
+        addin_dir=addin_dir,
+        appdata_dir=appdata_dir,
+        unregister_hkcu=False,
+    )
+    assert is_powerpoint_addin_installed(addin_dir=addin_dir, check_hkcu=False) is False
+
+
 # ---------------------------------------------------------------------------
 # Testy integracyjne COM (@pytest.mark.com)
 # ---------------------------------------------------------------------------

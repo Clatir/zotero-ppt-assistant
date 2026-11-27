@@ -530,6 +530,109 @@ def test_list_styles_contains_ieee_v4_and_apa() -> None:
     assert by_id[STYLE_APA].is_numeric is False
 
 
+def test_search_items_multi_word_cross_field_fallback_and_empty_query_topup() -> None:
+    """Gdy Zotero dla zapytania wielowyrazowego zwraca [], klient dociąga po głównym tokenie i filtruje."""
+    raw_items = [
+        {
+            "key": "K1",
+            "data": {
+                "key": "K1",
+                "itemType": "journalArticle",
+                "title": "An ethics safe harbor for international genomics",
+                "date": "2013",
+                "creators": [
+                    {"firstName": "Edward S.", "lastName": "Dove", "creatorType": "author"}
+                ],
+            },
+        },
+        {
+            "key": "K2",
+            "data": {
+                "key": "K2",
+                "itemType": "journalArticle",
+                "title": "Other genomics paper",
+                "date": "2020",
+                "creators": [
+                    {"firstName": "Jan", "lastName": "Nowak", "creatorType": "author"}
+                ],
+            },
+        },
+    ]
+
+    def handler(url: str, params: dict[str, Any] | None, _: float | None) -> _FakeResponse:
+        assert params is not None
+        q = params.get("q", "")
+        if q == "Dove genomics 2013":
+            return _FakeResponse(200, [])
+        if q == "genomics":
+            return _FakeResponse(200, raw_items)
+        return _FakeResponse(200, [])
+
+    client = ZoteroClient(session=_FakeSession(handler))
+    results = client.search_items("Dove genomics 2013", limit=10)
+    assert [it.key for it in results] == ["K1"]
+
+    # Puste zapytanie: pierwszy batch ma załącznik, drugi dociąga pełny limit
+    def empty_q_handler(url: str, params: dict[str, Any] | None, _: float | None) -> _FakeResponse:
+        assert params is not None
+        if params.get("limit") == 2:
+            return _FakeResponse(
+                200,
+                [
+                    {"key": "ATT1", "data": {"key": "ATT1", "itemType": "attachment"}},
+                    raw_items[0],
+                ],
+            )
+        return _FakeResponse(200, raw_items)
+
+    client_topup = ZoteroClient(session=_FakeSession(empty_q_handler))
+    topup_results = client_topup.search_items("", limit=2)
+    assert [it.key for it in topup_results] == ["K1", "K2"]
+
+
+def test_get_formatted_ref_falls_back_to_standard_ieee_when_custom_v4_missing() -> None:
+    """Gdy niestandardowy styl IEEE v4 nie jest zainstalowany w Zotero (HTTP 400), klient używa standardowego IEEE."""
+    from azp.contracts import STYLE_IEEE_FALLBACK
+
+    def handler(url: str, params: dict[str, Any] | None, _: float | None) -> _FakeResponse:
+        assert params is not None
+        if params.get("style") == STYLE_IEEE_V4:
+            return _FakeResponse(400, "Invalid style")
+        assert params.get("style") == STYLE_IEEE_FALLBACK
+        if url.endswith("/items/K1"):
+            return _FakeResponse(
+                200,
+                {
+                    "key": "K1",
+                    "citation": "[1]",
+                    "bib": '<div class="csl-entry">[1] A. Kowalski, <i>Test</i>, 2023.</div>',
+                },
+            )
+        return _FakeResponse(
+            200,
+            [
+                {
+                    "key": "K1",
+                    "citation": "[1]",
+                    "bib": '<div class="csl-entry">[1] A. Kowalski, <i>Test</i>, 2023.</div>',
+                },
+                {
+                    "key": "K2",
+                    "citation": "[1]",
+                    "bib": '<div class="csl-entry">[1] B. Nowak, 2024.</div>',
+                },
+            ],
+        )
+
+    client = ZoteroClient(session=_FakeSession(handler))
+    single = client.get_formatted_ref("K1", STYLE_IEEE_V4)
+    assert single.in_text == "[1]"
+    assert single.bib_plain == "A. Kowalski, Test, 2023."
+
+    batch = client.get_formatted_refs(["K1", "K2"], STYLE_IEEE_V4)
+    assert set(batch.keys()) == {"K1", "K2"}
+
+
 # ---------------------------------------------------------------------------
 # Test integracyjny z żywym lokalnym API Zotero 10
 # ---------------------------------------------------------------------------

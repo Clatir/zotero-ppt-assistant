@@ -36,25 +36,31 @@ Nie przechodzi, gdy.
   - *Jak sprawdzić:* przy włączonym Zotero 10 i zamkniętym PowerPoincie uruchom `python -m pytest -q` oraz `python -m pytest -q -m com`.
   - *Oczekiwany efekt:* przechodzą wszystkie testy bez COM (`133 passed`) oraz wszystkie testy COM (`3 passed`); sprawdzane są: zachowanie formatowania tekstu użytkownika na slajdzie przy wstawianiu, scalaniu i przenumerowaniu cytowań (T10), kopia zapasowa przez `SaveCopyAs` bez zapisu oryginalnego pliku użytkownika (D17), odmowa przebudowy niezapisanej prezentacji z komunikatem „Zapisz prezentację, żeby można było zrobić kopię zapasową.” i wycofaniem zmiany na liście (D18), śledzenie ustawień aktywnej prezentacji przy przełączaniu między plikami (D19) oraz powrót fokusu i kursora za wstawionym cytowaniem po *Cytuj* (D20).
   - *Nie przechodzi, gdy:* Zotero 10 jest wyłączone, PowerPoint użytkownika jest otwarty przed testami COM albo którykolwiek test zgłasza błąd.
-- **C2.1 Dodatki: `config.json`, skróty klawiszowe w okienku (D15) i uruchamianie ikoną `start_azp.bat` / `start_azp.pyw` (D16)** – **Automatycznie:** `tests/test_c2_extras.py` (26 testów)
+- **C2.1 Dodatki: `config.json`, skróty klawiszowe w okienku (D15) i uruchamianie ikoną `start_azp.bat` / `start_azp.pyw` (D16)** – **Automatycznie:** `tests/test_c2_extras.py` (28 testów)
   - *Jak sprawdzić:* uruchom `python -m pytest -q tests/test_c2_extras.py`.
-  - *Oczekiwany efekt:* 26 testów przechodzi (`26 passed`); zapis i odczyt `config.json` (z odpornością na błędne typy i uszkodzony JSON), skróty klawiszowe (`Enter` / `Ctrl+Enter` = *Cytuj*, `F5` / `Ctrl+R` = *Odśwież / Przenumeruj*, `Ctrl+F` = fokus na polu *Szukaj*) oraz skrypty startowe `start_azp.pyw` i `start_azp.bat` działają poprawnie.
-  - *Nie przechodzi, gdy:* którykolwiek z 26 testów w `tests/test_c2_extras.py` zgłasza błąd.
-- **C3.1 Odbiór ręczny na Twojej prezentacji w PowerPoincie** – **Tylko Ty:** uruchomienie okienka dwuklikiem w `start_azp.bat` (lub `start_azp.pyw`) obok otwartego PowerPointa i Zotero 10
+  - *Oczekiwany efekt:* 28 testów przechodzi (`28 passed`); zapis i odczyt `config.json` (z odpornością na błędne typy i uszkodzony JSON, w tym `dark_mode`), skróty klawiszowe (`Enter` / `Ctrl+Enter` = *Cytuj*, `F5` / `Ctrl+R` = *Odśwież / Przenumeruj*, `Ctrl+F` = fokus na polu *Szukaj*), skrypty startowe `start_azp.pyw` i `start_azp.bat` oraz instalator dodatku `install_pp_addin.bat` (`--install-addin` / `--uninstall-addin`) działają poprawnie.
+  - *Nie przechodzi, gdy:* którykolwiek z 28 testów w `tests/test_c2_extras.py` zgłasza błąd.
+- **C2.2 Poprawki audytu (T11), Tryb ciemny (D21) oraz Dodatek na wstążce PowerPointa (`AsystentZotero.ppam` – D22, T12)** – **Automatycznie:** `tests/test_zotero.py` (27 testów), `tests/test_ppt.py` (29 testów jednostkowych + 1 test COM), `tests/test_gui.py` (22 testy), `tests/test_c2_extras.py` (28 testów)
+  - *Jak sprawdzić:* uruchom `python -m pytest -q`.
+  - *Oczekiwany efekt:* przechodzą wszystkie 143 testy jednostkowe (`143 passed`); sprawdzane są: automatyczne oczyszczanie usuniętych ręcznie („martwych”) cytowań z tagów i stopki, wykrywanie kursora w grupach kształtów i tabelach oraz blokada w panelu notatek prelegenta, fallback stylu `STYLE_IEEE_V4` → standardowy IEEE przy HTTP 400, wyszukiwanie wielowyrazowe po tokenach, przełącznik *Tryb ciemny* (D21) oraz budowanie i instalacja dodatku wstążki `AsystentZotero.ppam` (D22).
+  - *Nie przechodzi, gdy:* którykolwiek ze 143 testów zgłasza błąd.
+- **C3.1 Odbiór ręczny na Twojej prezentacji w PowerPoincie** – **Tylko Ty:** uruchomienie okienka z przycisku **Asystent Zotero** na wstążce PowerPointa (karta **Dodatki** lub **Narzędzia główne**) albo dwuklikiem w `start_azp.bat` obok otwartego PowerPointa i Zotero 10
   - *Jak sprawdzić:*
-    1. Uruchom Zotero 10 i otwórz swoją prezentację `.pptx` w PowerPoincie.
-    2. Uruchom okienko dwuklikiem na `start_azp.bat` lub `start_azp.pyw`.
-    3. Kliknij na slajd poza jakimkolwiek polem tekstowym i naciśnij *Cytuj* (D10).
-    4. Postaw kursor w polu tekstowym (obok pogrubionego lub pokolorowanego słowa), wyszukaj pozycję (`Ctrl+F`), zaznacz ją i naciśnij `Enter` lub *Cytuj* (D15, D20, T10).
-    5. Nie ruszając kursora, zaznacz drugą pozycję (albo wybierz kilka pozycji z `Ctrl`/`Shift`) i kliknij *Cytuj* (D13).
-    6. Zmień na liście w okienku styl na APA 7 i z powrotem na IEEE v4, tryb numeracji (*Globalna* / *Od [1] na każdym slajdzie*), czcionkę, rozmiar, położenie pola źródeł (3 warianty) oraz nagłówek „Źródła:” (D2–D5, D9, D14, D17).
+    1. Uruchom Zotero 10 i otwórz (lub zrestartuj, jeśli był otwarty przed instalacją dodatku) PowerPointa ze swoją prezentacją `.pptx`.
+    2. Na wstążce PowerPointa przejdź na kartę **Dodatki** (lub na koniec karty **Narzędzia główne**) i kliknij przycisk **Asystent Zotero** (D22).
+    3. W okienku AZP zaznacz przełącznik **Tryb ciemny** (D21) i sprawdź zmianę wyglądu okienka.
+    4. Kliknij na slajd poza jakimkolwiek polem tekstowym i naciśnij *Cytuj* (D10).
+    5. Postaw kursor w polu tekstowym (obok pogrubionego lub pokolorowanego słowa), wyszukaj pozycję (`Ctrl+F`), naciśnij strzałkę w dół i `Enter` (albo kliknij dwukrotnie pozycję na liście wyników lub przycisk *Cytuj*) (D15, D20, T10).
+    6. Nie ruszając kursora, zaznacz drugą pozycję (albo wybierz kilka pozycji z `Ctrl`/`Shift`) i kliknij *Cytuj* (D13).
+    7. Zmień na liście w okienku styl na APA 7 i z powrotem na IEEE v4, tryb numeracji (*Globalna* / *Od [1] na każdym slajdzie*), czcionkę, rozmiar, położenie pola źródeł (3 warianty) oraz nagłówek „Źródła:” (D2–D5, D9, D14, D17).
   - *Oczekiwany efekt:*
-    - Okienko uruchamia się bez czarnej konsoli w tle i trzyma się na wierzchu (D1, D16).
+    - Przycisk **Asystent Zotero** na wstążce PowerPointa otwiera okienko AZP bez czarnej konsoli w tle (a kolejne kliknięcie przywraca otwarte okienko na wierzch bez duplikowania okien – D22, T12).
+    - Przełącznik **Tryb ciemny** natychmiast zmienia motyw okienka na ciemny i zapamiętuje wybór w `config.json` (D21).
     - Bez kursora w tekście prezentacja nie zmienia się, a pasek stanu prosi o ustawienie kursora (D10).
     - Po *Cytuj* w tekście pojawia się cytowanie, pod slajdem pole źródeł z zachowaną kursywą (T4), formatowanie sąsiednich słów na slajdzie nie ginie (T10), a fokus wraca do PowerPointa za wstawionym cytowaniem (D20).
-    - Kolejne cytowanie przy kursorze scala się automatycznie w `[1, 2]` / `(Autor1; Autor2)` (D13).
-    - Każda zmiana na liście od razu przebudowuje prezentację i tworzy obok pliku kopię `<nazwa>.bak.pptx` bez nadpisywania samego pliku na dysku (D14, D17).
-  - *Nie przechodzi, gdy:* okienko nie widzi kursora mimo edycji tekstu, psuje formatowanie tekstu na slajdzie, brak kursywy w stopce albo nie powstaje kopia `.bak.pptx`.
+    - Kolejne cytowanie przy kursorze scala się automatycznie w `[1, 2]` / `(Autor1; Autor2)` (D13), a ręczne usunięcie cytowania klawiszem `Backspace` na slajdzie i kliknięcie *Odśwież / Przenumeruj* usuwa pozycję ze stopki i przenumerowuje slajd (T11).
+    - Każda zmiana na liście (na zapisanej prezentacji) od razu przebudowuje prezentację i tworzy obok pliku kopię `<nazwa>.bak.pptx` bez nadpisywania samego pliku na dysku (D14, D17).
+  - *Nie przechodzi, gdy:* przycisk na wstążce nie otwiera okienka, okienko nie widzi kursora mimo edycji tekstu, psuje formatowanie tekstu na slajdzie, brak kursywy w stopce albo nie powstaje kopia `.bak.pptx`.
 
 ## Wszystkie punkty
 - A1.1 Odpowiedź lokalnego API Zotero dla stylów IEEE v4 i APA
@@ -66,4 +72,5 @@ Nie przechodzi, gdy.
 - B2.2 Silnik numeracji i stylów (`azp.engine`)
 - C1.1 Integracja okienka z prawdziwym PowerPointem i Zotero (`azp.main`, `python -m azp`)
 - C2.1 Dodatki: `config.json`, skróty klawiszowe w okienku (D15) i uruchamianie ikoną `start_azp.bat` / `start_azp.pyw` (D16)
+- C2.2 Poprawki audytu (T11), Tryb ciemny (D21) oraz Dodatek na wstążce PowerPointa (`AsystentZotero.ppam` – D22, T12)
 - C3.1 Odbiór ręczny na Twojej prezentacji w PowerPoincie

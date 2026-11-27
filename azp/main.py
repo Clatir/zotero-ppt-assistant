@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import sys
 import tkinter as tk
 from pathlib import Path
+from typing import Sequence
 
 from azp.config import DEFAULT_CONFIG_PATH
 from azp.contracts import AzpError, Settings, SlideDoc, ZoteroSource
 from azp.engine import CitationEngine
 from azp.gui import AzpWindow
-from azp.ppt import PowerPointSlideDoc
+from azp.ppt import (
+    PowerPointSlideDoc,
+    install_powerpoint_addin,
+    is_powerpoint_addin_installed,
+    uninstall_powerpoint_addin,
+)
 from azp.zotero import ZoteroClient
 
 
@@ -82,14 +89,70 @@ def build_window(
     )
 
 
-def main() -> None:
-    """Uruchamia pływające okienko Asystenta Zotero dla PowerPointa."""
+def focus_existing_azp_window() -> bool:
+    """Jeśli okienko AZP jest już otwarte, przywraca je na wierzch i zwraca `True`."""
+    try:
+        import win32con
+        import win32gui
+
+        found: list[int] = []
+
+        def _cb(hwnd: int, _extra: object) -> None:
+            if not win32gui.IsWindowVisible(hwnd):
+                return
+            title = (win32gui.GetWindowText(hwnd) or "").strip()
+            if title == "Asystent Zotero dla PowerPointa":
+                found.append(hwnd)
+
+        win32gui.EnumWindows(_cb, None)
+        if found:
+            target = found[0]
+            try:
+                if win32gui.IsIconic(target):
+                    win32gui.ShowWindow(target, win32con.SW_RESTORE)
+                else:
+                    win32gui.ShowWindow(target, win32con.SW_SHOW)
+            except Exception:
+                pass
+            try:
+                win32gui.SetForegroundWindow(target)
+            except Exception:
+                pass
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Uruchamia pływające okienko AZP lub instalator dodatku wstążki PowerPointa."""
+    args = list(sys.argv[1:] if argv is None else argv)
+    if "--install-addin" in args:
+        ppam = install_powerpoint_addin()
+        print(f"Zainstalowano dodatek wstążki PowerPointa: {ppam}")
+        return 0
+    if "--uninstall-addin" in args:
+        uninstall_powerpoint_addin()
+        print("Odinstalowano dodatek wstążki PowerPointa.")
+        return 0
+
+    if focus_existing_azp_window():
+        return 0
+
+    try:
+        if not is_powerpoint_addin_installed():
+            install_powerpoint_addin()
+    except Exception:
+        pass
+
     window = build_window()
     window.run()
+    return 0
 
 
 __all__ = [
     "build_window",
     "describe_error",
+    "focus_existing_azp_window",
     "main",
 ]

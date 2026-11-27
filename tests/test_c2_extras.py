@@ -69,6 +69,7 @@ def test_save_and_load_config_roundtrip_all_fields(tmp_path: Path) -> None:
         json.dumps({"style_id": None}),  # M1: None jako style_id
         json.dumps({"footer_header": "false", "font_size_pt": 12}),  # M1: str jako bool
         json.dumps({"always_on_top": "false", "font_size_pt": 12}),  # M1: str jako bool
+        json.dumps({"dark_mode": "true", "font_size_pt": 12}),  # str jako bool dla dark_mode
         json.dumps({"font_size_pt": True}),  # M1: bool jako int
         json.dumps({"font_size_pt": 12.7}),  # M1: float jako int
     ],
@@ -355,3 +356,29 @@ def test_h1_test_main_does_not_depend_on_or_touch_repo_config_json(
     tm.test_build_window_wires_engine_and_returns_focus_after_cite_d20(tk_root)
     tm.test_build_window_turns_unexpected_powerpoint_errors_into_status(tk_root)
     assert config_io_calls == []
+
+
+def test_install_pp_addin_bat_and_cli_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from azp.main import main
+
+    addin_bat = REPO_ROOT / "install_pp_addin.bat"
+    assert addin_bat.is_file()
+    assert "--install-addin" in addin_bat.read_text(encoding="utf-8")
+
+    installed: list[bool] = []
+    uninstalled: list[bool] = []
+    monkeypatch.setattr(
+        "azp.main.install_powerpoint_addin",
+        lambda: (installed.append(True), tmp_path / "AsystentZotero.ppam")[1],
+    )
+    monkeypatch.setattr(
+        "azp.main.uninstall_powerpoint_addin",
+        lambda: uninstalled.append(True),
+    )
+
+    assert main(["--install-addin"]) == 0
+    assert installed == [True]
+    assert main(["--uninstall-addin"]) == 0
+    assert uninstalled == [True]

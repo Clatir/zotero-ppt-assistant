@@ -4,18 +4,31 @@
 - **Zakończone ciągi / etapy:**
   - **Ciąg A – Fundament** (A1, A2).
   - **Ciąg B – Rdzeń** (Tor B1: **B1.1 Klient Zotero**, **B1.2 Okienko**; Tor B2: **B2.1 Warstwa PowerPoint**, **B2.2 Silnik numeracji i stylów**).
-  - **Ciąg C – Integracja i odbiór:** etapy kodowe **C1 Integracja** (`xhigh`) oraz **C2 Dodatki** (`high`) zakończone, po przeglądach kodu, commity wypchnięte na GitHuba.
-- **Pełny zestaw testów po C2:** `133 passed` bez COM + `3 passed` COM (`-m com`).
-- **Następny krok:** **Etap C3 Odbiór na Twojej prezentacji** (wspólny odbiór na żywo według listy w `docs/odbior.md`) po słowie „dalej”.
+  - **Ciąg C – Integracja i odbiór:** etapy kodowe **C1 Integracja** (`xhigh`), **C2 Dodatki** (`high`) oraz poprawki audytowe + **Tryb ciemny** (D21) + **Dodatek wstążki PowerPointa `.ppam`** (D22, T11, T12) zakończone, po przeglądach kodu, commity wypchnięte na GitHuba.
+- **Pełny zestaw testów:** `143 passed` bez COM + `3 passed` COM (`-m com`).
+- **Następny krok:** **Etap C3 Odbiór na Twojej prezentacji** (wspólny odbiór na żywo według listy w `docs/odbior.md`).
 
 ## Kolejka
 | Ciąg | Stan |
 |---|---|
 | A – Fundament | gotowe (A1, A2) |
 | B – Rdzeń (tory B1 i B2 równolegle) | gotowe (B1.1, B1.2, B2.1, B2.2) |
-| C – Integracja i odbiór | C1 i C2 gotowe; czeka na „dalej” do C3 (Odbiór na Twojej prezentacji) |
+| C – Integracja i odbiór | C1, C2 + poprawki audytu, tryb ciemny (D21) i wstążka PP (D22) gotowe; gotowe do C3 (Odbiór na Twojej prezentacji) |
 
 ## Zrealizowane etapy
+
+### Audyt kodu, Tryb ciemny i Dodatek wstążki PowerPointa (2026-11-27)
+- **Zakres:**
+  - **Naprawa błędów „działających tylko teoretycznie” (T11):**
+    1. *Martwe cytowania („duchy”) po ręcznym usunięciu w PowerPoincie (`azp/ppt/com_doc.py`)*: weryfikacja tagów `AZP_CITATIONS` względem aktualnego tekstu kształtów slajdu w `_get_citations_by_shape()` i `read_slides()`, sortowanie cytowań po faktycznej pozycji w tekście (obsługa przeklejania zdań) oraz usunięcie błędnego doklejania nieznalezionych cytowań z usuniętych pól do `shape_cits[0]`.
+    2. *Utrata kursora i wykrywanie zaznaczenia w prawdziwym oknie PowerPointa (`azp/ppt/com_doc.py`)*: ponowne zaznaczanie pozycji kursora (`_restore_last_insert_cursor`) po utworzeniu/modyfikacji kształtu stopki w `set_slide_footer()` oraz po `focus_presentation_window()`; obsługa kursora wewnątrz zgrupowanych kształtów (`GroupItems` / `HasChildShapeRange`) i komórek tabeli (`HasTable`); odfiltrowanie panelu notatek prelegenta (`NotesPage`); obsługa zaznaczonego tekstu (`Length > 0`) oraz odzyskiwanie kursora po przełączeniu zaznaczenia na kształt (`PP_SELECTION_SHAPES`).
+    3. *Formatowanie stopki i odporność tagów (`azp/ppt/com_doc.py`)*: ustawianie `WordWrap` i `Width` po `AutoSize` (zapobiega zmianie szerokości stopki przy autodopasowaniu), wywołania COM `Characters` tylko dla przebiegów z kursywą/pogrubieniem, odporność `deserialize_citations` / `deserialize_footer_entries` / `deserialize_settings` na uszkodzony JSON i błędne typy.
+    4. *Spójność `AzpController` i odporność na błędy COM (`azp/gui/app.py`)*: zastąpienie zduplikowanych metod `_cite_builtin` / `_rebuild_builtin` w `AzpController` pełnym `CitationEngine` (scalanie sąsiednich cytowań D13 i globalne przenumerowanie na wszystkich slajdach), przechwytywanie surowych wyjątków COM we wszystkich wywołaniach `slide_doc`, dwuklik `<Double-Button-1>` na liście wyników (= *Cytuj*) oraz strzałka `<Down>` w polu szukania (= przejście do listy wyników).
+    5. *Wyszukiwanie wielowyrazowe i fallback stylu w `ZoteroClient` (`azp/zotero/client.py`)*: fallback wyszukiwania po tokenach przy zapytaniach łączących różne pola (autor + tytuł + rok), dociąganie wyników przy pustym zapytaniu ponad odfiltrowane załączniki/notatki oraz automatyczny fallback stylu `STYLE_IEEE_V4` → `http://www.zotero.org/styles/ieee` przy braku niestandardowego stylu v4 w Zotero (HTTP 400).
+  - **Tryb ciemny okienka (D21):** pole `Settings.dark_mode: bool = False` w `azp/contracts.py`, przełącznik *Tryb ciemny* w `AzpWindow` (`azp/gui/app.py`), palety `DARK_THEME_COLORS` i `LIGHT_THEME_COLORS` ze stylizacją wszystkich widgetów `ttk`/`tk`, rozwijanych list `Combobox` oraz ciemnego paska tytułowego Windows 10/11 (DWM), z zapisem w `config.json` bez wywoływania przebudowy prezentacji.
+  - **Dodatek na wstążce PowerPointa (D22, T12):** moduł `azp/ppt/addin.py` (`build_ppam_addin`, `build_vbs_launcher`, `install_powerpoint_addin`, `uninstall_powerpoint_addin`, `is_powerpoint_addin_installed`), skrypt `install_pp_addin.bat`, flagi CLI `--install-addin` / `--uninstall-addin` oraz `focus_existing_azp_window()` w `azp/main.py`. Tworzy i rejestruje w `HKCU` dodatek `AsystentZotero.ppam` z przyciskiem **Asystent Zotero** na kartach **Dodatki** (`TabAddIns`) oraz **Narzędzia główne** (`TabHome`) na wstążce PowerPointa.
+- **Decyzje:** D21, D22, T11, T12.
+- **Testy:** `pytest -q` (`143 passed`).
 
 ### C2 Dodatki (2026-11-27)
 - **Zakres:** `azp/config.py` (`DEFAULT_CONFIG_PATH`, `load_config`, `save_config` – zapis i odczyt domyślnych ustawień w `config.json` z bezpiecznym powrotem do `Settings()` przy braku pliku lub uszkodzonym JSON-ie), `.gitignore` (`config.json`), `azp/contracts.py` (ścisła walidacja typów w `Settings.__post_init__` i `Settings.from_dict` – M1), `azp/gui/app.py` i `azp/main.py` (integracja `config_path`, skróty klawiszowe wewnątrz okienka D15: `Enter` / `Ctrl+Enter` = *Cytuj*, `F5` / `Ctrl+R` = *Odśwież / Przenumeruj*, `Ctrl+F` = fokus i zaznaczenie pola *Szukaj*), `start_azp.pyw` i `start_azp.bat` (uruchamianie ikoną bez czarnej konsoli w tle D16), `tests/test_c2_extras.py` (26 przypadków testowych, w tym poprawki H1 i M1 z 1. rundy przeglądu `high`).
@@ -67,6 +80,4 @@
 
 ## Uwagi na później
 - `low`/`nit` (A1, `tests/test_smoke_env.py`): plik `tests/data/test_smoke.pptx` jest usuwany przed startem testu i zostaje po teście w ignorowanym katalogu `tests/data/` do ewentualnego podglądu.
-- `low`/`nit` (B1.1, `tests/test_zotero.py:517`): test integracyjny z żywym Zotero zakłada, że pierwsza pozycja z `/items/top` posiada element formatowany kursywą w stylu IEEE v4.
-- `low`/`nit` (C1, `azp/gui/app.py:500`, `azp/ppt/com_doc.py:726`): wywołanie `save_settings` przy `rebuild=False` oraz odczyt `pres.Slides.Count` na początku `_resolve_cursor_context()` można dodatkowo opakować w `try...except Exception:`.
-- `low`/`nit` (C1, `azp/ppt/com_doc.py:571`): `deserialize_settings` może dodatkowo łapać `(ValueError, TypeError)` na wypadek ręcznie uszkodzonego tagu `AZP_SETTINGS`.
+- `low`/`nit` (B1.1, `tests/test_zotero.py`): test integracyjny z żywym Zotero zakłada, że pierwsza pozycja z `/items/top` posiada element formatowany kursywą w stylu IEEE v4.

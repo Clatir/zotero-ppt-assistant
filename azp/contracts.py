@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Literal, Protocol, Sequence, runtime_checkable
 
 STYLE_IEEE_V4 = "http://www.zotero.org/styles/ieee-praca-inzynierska-access-date-v4"
+STYLE_IEEE_FALLBACK = "http://www.zotero.org/styles/ieee"
 STYLE_APA = "http://www.zotero.org/styles/apa"
 
 NumberingMode = Literal["global", "per_slide"]
@@ -181,6 +182,7 @@ class Settings:
     footer_position: FooterPosition = "bottom_full"
     footer_header: bool = True
     always_on_top: bool = True
+    dark_mode: bool = False
 
     def __post_init__(self) -> None:
         if self.numbering_mode not in VALID_NUMBERING_MODES:
@@ -202,6 +204,8 @@ class Settings:
             raise ValueError(f"Nieprawidłowa wartość footer_header: {self.footer_header!r}")
         if not isinstance(self.always_on_top, bool):
             raise ValueError(f"Nieprawidłowa wartość always_on_top: {self.always_on_top!r}")
+        if not isinstance(self.dark_mode, bool):
+            raise ValueError(f"Nieprawidłowa wartość dark_mode: {self.dark_mode!r}")
 
     def to_dict(self) -> dict[str, Any]:
         """Serializuje ustawienia do słownika (do zapisu w Tags lub config.json)."""
@@ -213,6 +217,7 @@ class Settings:
             "footer_position": self.footer_position,
             "footer_header": self.footer_header,
             "always_on_top": self.always_on_top,
+            "dark_mode": self.dark_mode,
         }
 
     @classmethod
@@ -227,6 +232,7 @@ class Settings:
             footer_position=data.get("footer_position", defaults.footer_position),
             footer_header=data.get("footer_header", defaults.footer_header),
             always_on_top=data.get("always_on_top", defaults.always_on_top),
+            dark_mode=data.get("dark_mode", defaults.dark_mode),
         )
 
 

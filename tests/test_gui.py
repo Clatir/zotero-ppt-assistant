@@ -676,3 +676,68 @@ def test_c1_m1_setting_change_or_refresh_right_after_presentation_switch_syncs_d
         assert win.controller.settings.font_name == "Calibri"
     finally:
         win.destroy()
+
+
+def test_dark_mode_toggle_styles_window_and_persists_without_rebuild(
+    tk_root: tk.Tk, tmp_path: Path
+) -> None:
+    """Przełącznik Tryb ciemny zmienia kolory okienka i zapisuje ustawienie bez przebudowy prezentacji."""
+    from azp.config import load_config
+    from azp.gui import DARK_THEME_COLORS, LIGHT_THEME_COLORS
+
+    cfg_path = tmp_path / "config.json"
+    doc = FakeSlideDoc()
+    win = AzpWindow(
+        zotero=FakeZoteroSource(),
+        slide_doc=doc,
+        master=tk_root,
+        poll_interval_ms=None,
+        config_path=cfg_path,
+    )
+    try:
+        assert win.is_dark_mode() is False
+        assert win.results_listbox.cget("bg") == LIGHT_THEME_COLORS["field_bg"]
+
+        win.dark_mode_check.invoke()
+        win.update_idletasks()
+        assert win.is_dark_mode() is True
+        assert win.controller.settings.dark_mode is True
+        assert win.results_listbox.cget("bg") == DARK_THEME_COLORS["field_bg"]
+        assert win.results_listbox.cget("fg") == DARK_THEME_COLORS["fg"]
+        assert win.root.cget("bg") == DARK_THEME_COLORS["bg"]
+        assert "Tryb ciemny: włączony" in win.get_status_message()
+        assert doc.backups_created == []
+        assert load_config(cfg_path).dark_mode is True
+
+        win.set_dark_mode(False)
+        win.update_idletasks()
+        assert win.is_dark_mode() is False
+        assert win.results_listbox.cget("bg") == LIGHT_THEME_COLORS["field_bg"]
+        assert "Tryb ciemny: wyłączony" in win.get_status_message()
+        assert load_config(cfg_path).dark_mode is False
+    finally:
+        win.destroy()
+
+
+def test_double_click_cites_and_down_arrow_moves_focus_to_results(
+    tk_root: tk.Tk,
+) -> None:
+    """Dwuklik na liście wyników wstawia cytowanie, a strzałka w dół z pola szukania wybiera pierwszy wynik."""
+    win, _zot, doc = _make_window(tk_root=tk_root)
+    try:
+        win.root.update()
+        win.search_entry.focus_force()
+        win.root.update()
+        win.search_entry.event_generate("<Down>")
+        win.root.update()
+        assert win.get_selected_indices() == (0,)
+
+        assert win.results_listbox.bind("<Double-Button-1>")
+        win.results_listbox.event_generate("<ButtonPress-1>", x=10, y=10)
+        win.results_listbox.event_generate("<ButtonRelease-1>", x=10, y=10)
+        win.results_listbox.event_generate("<ButtonPress-1>", x=10, y=10)
+        win.results_listbox.event_generate("<ButtonRelease-1>", x=10, y=10)
+        win.root.update()
+        assert len(doc.read_slides()[0].citations) == 1
+    finally:
+        win.destroy()

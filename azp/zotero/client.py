@@ -9,6 +9,7 @@ import requests
 
 from azp.contracts import (
     STYLE_APA,
+    STYLE_IEEE_FALLBACK,
     STYLE_IEEE_V4,
     FormattedRef,
     StyleInfo,
@@ -127,7 +128,10 @@ class ZoteroClient:
         self._timeout = timeout
         self._session = session if session is not None else requests.Session()
         self._numeric_styles = frozenset(
-            style.style_id for style in _DEFAULT_STYLES if style.is_numeric
+            {
+                *(style.style_id for style in _DEFAULT_STYLES if style.is_numeric),
+                STYLE_IEEE_FALLBACK,
+            }
         )
 
     @property
@@ -165,6 +169,23 @@ class ZoteroClient:
             raise ZoteroOfflineError(
                 f"{OFFLINE_MESSAGE} (niepoprawna odpowiedź JSON)."
             ) from exc
+
+    def _request_with_style_fallback(
+        self,
+        path: str,
+        params: dict[str, Any],
+        *,
+        allow_404: bool = False,
+    ) -> Any:
+        try:
+            return self._request_json(path, params=params, allow_404=allow_404)
+        except ZoteroOfflineError as exc:
+            if params.get("style") == STYLE_IEEE_V4 and "(HTTP 400)" in str(exc):
+                fallback_params = {**params, "style": STYLE_IEEE_FALLBACK}
+                return self._request_json(
+                    path, params=fallback_params, allow_404=allow_404
+                )
+            raise
 
     def _build_formatted_ref(
         self,
@@ -233,15 +254,69 @@ class ZoteroClient:
             )
 
         items: list[ZoteroItem] = []
+        seen_keys: set[str] = set()
         for raw_item in payload:
             if not isinstance(raw_item, dict):
                 continue
             item = _parse_zotero_item(raw_item)
-            if item is None:
+            if item is None or item.key in seen_keys:
                 continue
+            seen_keys.add(item.key)
             items.append(item)
             if len(items) >= limit:
                 break
+
+        if not clean_query and len(items) < limit and len(payload) >= fetch_limit:
+            extra_payload = self._request_json(
+                "/items/top",
+                params={
+                    "format": "json",
+                    "include": "data",
+                    "limit": max(limit * 3, 50),
+                },
+            )
+            if isinstance(extra_payload, list):
+                for raw_item in extra_payload:
+                    if not isinstance(raw_item, dict):
+                        continue
+                    item = _parse_zotero_item(raw_item)
+                    if item is None or item.key in seen_keys:
+                        continue
+                    seen_keys.add(item.key)
+                    items.append(item)
+                    if len(items) >= limit:
+                        break
+
+        tokens = [t.casefold() for t in clean_query.split() if t]
+        if len(tokens) > 1 and not items:
+            non_year = [t for t in tokens if not t.isdigit()]
+            primary_token = max(non_year or tokens, key=len)
+            fallback_payload = self._request_json(
+                "/items/top",
+                params={
+                    "format": "json",
+                    "include": "data",
+                    "limit": max(limit * 3, 75),
+                    "q": primary_token,
+                    "qmode": "titleCreatorYear",
+                },
+            )
+            if isinstance(fallback_payload, list):
+                for raw_item in fallback_payload:
+                    if not isinstance(raw_item, dict):
+                        continue
+                    item = _parse_zotero_item(raw_item)
+                    if item is None or item.key in seen_keys:
+                        continue
+                    haystack = " ".join(
+                        (*item.authors, item.title, item.year)
+                    ).casefold()
+                    if all(tok in haystack for tok in tokens):
+                        seen_keys.add(item.key)
+                        items.append(item)
+                        if len(items) >= limit:
+                            break
+
         return items
 
     def get_formatted_ref(self, key: str, style_id: str) -> FormattedRef:
@@ -250,7 +325,7 @@ class ZoteroClient:
         if not clean_key:
             raise KeyError("Pusty klucz pozycji Zotero.")
 
-        payload = self._request_json(
+        payload = self._request_with_style_fallback(
             f"/items/{clean_key}",
             params={
                 "include": "data,bib,citation",
@@ -289,7 +364,7 @@ class ZoteroClient:
         for start in range(0, len(unique_keys), _BATCH_SIZE):
             chunk = unique_keys[start : start + _BATCH_SIZE]
             wanted = set(chunk)
-            payload = self._request_json(
+            payload = self._request_with_style_fallback(
                 "/items",
                 params={
                     "itemKey": ",".join(chunk),

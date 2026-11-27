@@ -2,6 +2,16 @@
 
 from __future__ import annotations
 
+from azp.ppt.addin import (
+    ADDIN_FILENAME,
+    ADDIN_NAME,
+    TRUSTED_LOCATION_KEY_NAME,
+    build_ppam_addin,
+    build_vbs_launcher,
+    install_powerpoint_addin,
+    is_powerpoint_addin_installed,
+    uninstall_powerpoint_addin,
+)
 from azp.ppt.com_doc import (
     CharFormatRange,
     DEFAULT_FOOTER_HEIGHT_PT,
@@ -38,6 +48,8 @@ from azp.ppt.com_doc import (
 )
 
 __all__ = [
+    "ADDIN_FILENAME",
+    "ADDIN_NAME",
     "CharFormatRange",
     "DEFAULT_FOOTER_HEIGHT_PT",
     "FOOTER_HEADER_TEXT",
@@ -51,16 +63,21 @@ __all__ = [
     "TAG_ROLE",
     "TAG_ROLE_FOOTER",
     "TAG_SETTINGS",
+    "TRUSTED_LOCATION_KEY_NAME",
     "TextEdit",
     "apply_citation_at_cursor_in_text",
     "apply_text_edits",
     "build_footer_text_and_ranges",
+    "build_ppam_addin",
+    "build_vbs_launcher",
     "choose_powerpoint_window",
     "compute_footer_geometry",
     "deserialize_citations",
     "deserialize_footer_entries",
     "deserialize_settings",
     "find_adjacent_citation_in_text",
+    "install_powerpoint_addin",
+    "is_powerpoint_addin_installed",
     "merge_citation_texts",
     "merge_citations",
     "plan_citation_insert",
@@ -70,4 +87,5 @@ __all__ = [
     "serialize_citations",
     "serialize_footer_entries",
     "serialize_settings",
+    "uninstall_powerpoint_addin",
 ]

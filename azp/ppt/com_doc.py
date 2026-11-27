@@ -501,19 +501,28 @@ def deserialize_citations(raw: str) -> tuple[Citation, ...]:
     """Odtwarza krotkę `Citation` z JSON-a w tagu `AZP_CITATIONS`."""
     if not raw or not raw.strip():
         return ()
-    data = json.loads(raw)
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return ()
     if not isinstance(data, list):
         return ()
     result: list[Citation] = []
     for item in data:
         if isinstance(item, dict) and item.get("keys"):
-            result.append(
-                Citation(
-                    citation_id=str(item["citation_id"]),
-                    keys=tuple(str(k) for k in item["keys"]),
-                    text=str(item.get("text", "")),
+            try:
+                keys = tuple(str(k) for k in item["keys"] if str(k).strip())
+                if not keys:
+                    continue
+                result.append(
+                    Citation(
+                        citation_id=str(item["citation_id"]),
+                        keys=keys,
+                        text=str(item.get("text", "")),
+                    )
                 )
-            )
+            except (KeyError, ValueError, TypeError):
+                continue
     return tuple(result)
 
 
@@ -541,7 +550,10 @@ def deserialize_footer_entries(raw: str) -> tuple[FooterEntry, ...]:
     """Odtwarza krotkę `FooterEntry` z JSON-a w tagu `AZP_FOOTER_ENTRIES`."""
     if not raw or not raw.strip():
         return ()
-    data = json.loads(raw)
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return ()
     if not isinstance(data, list):
         return ()
     result: list[FooterEntry] = []
@@ -549,6 +561,8 @@ def deserialize_footer_entries(raw: str) -> tuple[FooterEntry, ...]:
         if not isinstance(item, dict) or "key" not in item:
             continue
         raw_spans = item.get("spans", [])
+        if not isinstance(raw_spans, list):
+            continue
         spans = tuple(
             TextSpan(
                 text=str(sp.get("text", "")),
@@ -574,13 +588,16 @@ def serialize_settings(settings: Settings) -> str:
 
 
 def deserialize_settings(raw: str) -> Settings | None:
-    """Odtwarza `Settings` z JSON-a w tagu `AZP_SETTINGS` (lub `None`, jeśli pusty)."""
+    """Odtwarza `Settings` z JSON-a w tagu `AZP_SETTINGS` (lub `None`, jeśli pusty/uszkodzony)."""
     if not raw or not raw.strip():
         return None
-    data = json.loads(raw)
-    if not isinstance(data, dict):
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return None
+        return Settings.from_dict(data)
+    except (ValueError, TypeError, KeyError):
         return None
-    return Settings.from_dict(data)
 
 
 def _get_tag(com_obj: Any, key: str) -> str:
@@ -719,23 +736,104 @@ class PowerPointSlideDoc:
                 return shape
         return None
 
+    def _collect_text_shapes_from(self, shape: Any, out: list[Any]) -> None:
+        if _get_tag(shape, TAG_ROLE) == TAG_ROLE_FOOTER:
+            return
+        if _shape_has_text_frame(shape):
+            out.append(shape)
+            return
+        try:
+            if getattr(shape, "HasTable", 0):
+                table = shape.Table
+                rows = int(table.Rows.Count)
+                cols = int(table.Columns.Count)
+                for r in range(1, rows + 1):
+                    for c in range(1, cols + 1):
+                        cell_shape = table.Cell(r, c).Shape
+                        if _shape_has_text_frame(cell_shape):
+                            out.append(cell_shape)
+                return
+        except Exception:
+            pass
+        try:
+            group_items = getattr(shape, "GroupItems", None)
+            if group_items is not None:
+                g_count = int(group_items.Count)
+                for j in range(1, g_count + 1):
+                    self._collect_text_shapes_from(group_items(j), out)
+        except Exception:
+            pass
+
     def _list_body_text_shapes(self, slide: Any) -> list[Any]:
         shapes: list[Any] = []
         count = int(slide.Shapes.Count)
         for i in range(1, count + 1):
-            shape = slide.Shapes(i)
-            if _get_tag(shape, TAG_ROLE) == TAG_ROLE_FOOTER:
-                continue
-            if _shape_has_text_frame(shape):
-                shapes.append(shape)
+            self._collect_text_shapes_from(slide.Shapes(i), shapes)
         return shapes
+
+    def _resolve_selected_shape(self, sel: Any) -> Any | None:
+        shape: Any | None = None
+        try:
+            if getattr(sel, "HasChildShapeRange", 0):
+                shape = sel.ChildShapeRange(1)
+        except Exception:
+            shape = None
+        if shape is None:
+            try:
+                shape = sel.ShapeRange(1)
+            except Exception:
+                return None
+
+        if not _shape_has_text_frame(shape):
+            try:
+                if getattr(shape, "HasTable", 0):
+                    table = shape.Table
+                    rows = int(table.Rows.Count)
+                    cols = int(table.Columns.Count)
+                    first_cell_shape: Any | None = None
+                    for r in range(1, rows + 1):
+                        for c in range(1, cols + 1):
+                            cell = table.Cell(r, c)
+                            c_shape = cell.Shape
+                            if _shape_has_text_frame(c_shape):
+                                if first_cell_shape is None:
+                                    first_cell_shape = c_shape
+                                if getattr(cell, "Selected", 0):
+                                    return c_shape
+                    if first_cell_shape is not None:
+                        return first_cell_shape
+            except Exception:
+                pass
+        return shape
+
+    def _restore_last_insert_cursor(self, only_slide_index: int | None = None) -> bool:
+        """Przywraca zaznaczenie kursora w polu tekstowym po operacjach na slajdzie/oknie."""
+        if self._cursor_target is not None or self._last_insert_cursor is None:
+            return False
+        slide_idx, shape_key, char_pos = self._last_insert_cursor
+        if only_slide_index is not None and slide_idx != only_slide_index:
+            return False
+        try:
+            slide = self._get_slide_com(slide_idx)
+            for sh in self._list_body_text_shapes(slide):
+                if self._shape_key(sh) == shape_key:
+                    tr = sh.TextFrame.TextRange
+                    pos = max(0, min(char_pos, len(str(tr.Text))))
+                    tr.Characters(pos + 1, 0).Select()
+                    return True
+        except Exception:
+            pass
+        return False
 
     def _resolve_cursor_context(self) -> tuple[int, Any, Any, str, int] | None:
         """Zwraca `(slide_index, slide, shape, shape_text, char_pos)` lub `None`, gdy brak kursora."""
         pres = self._get_presentation()
         if pres is None:
             return None
-        slide_count = int(pres.Slides.Count)
+        try:
+            slide_count = int(pres.Slides.Count)
+        except Exception:
+            return None
         if slide_count <= 0:
             return None
 
@@ -769,6 +867,11 @@ class PowerPointSlideDoc:
                         target_shape = cand
                 except Exception:
                     target_shape = None
+                if target_shape is None:
+                    for sh in self._list_body_text_shapes(slide):
+                        if getattr(sh, "Name", None) == spec:
+                            target_shape = sh
+                            break
 
             if target_shape is None:
                 return None
@@ -786,11 +889,46 @@ class PowerPointSlideDoc:
             return None
         try:
             win = app.ActiveWindow
+            try:
+                pane_view = int(win.ActivePane.ViewType)
+                # ppViewNotesPage = 3, ppViewNotesMaster = 5 (panel notatek prelegenta)
+                if pane_view in (3, 5):
+                    return None
+            except Exception:
+                pass
             sel = win.Selection
-            if int(sel.Type) != PP_SELECTION_TEXT:
+            sel_type = int(sel.Type)
+            if sel_type == PP_SELECTION_SHAPES and self._last_insert_cursor is not None:
+                shape = self._resolve_selected_shape(sel)
+                if (
+                    shape is not None
+                    and _get_tag(shape, TAG_ROLE) != TAG_ROLE_FOOTER
+                    and _shape_has_text_frame(shape)
+                ):
+                    try:
+                        slide_idx = int(sel.SlideRange(1).SlideIndex)
+                    except Exception:
+                        slide_idx = int(win.View.Slide.SlideIndex)
+                    last_slide_idx, last_shape_key, last_char_pos = self._last_insert_cursor
+                    if (
+                        1 <= slide_idx <= slide_count
+                        and slide_idx == last_slide_idx
+                        and self._shape_key(shape) == last_shape_key
+                    ):
+                        slide = pres.Slides(slide_idx)
+                        shape_text = str(shape.TextFrame.TextRange.Text)
+                        char_pos = max(0, min(last_char_pos, len(shape_text)))
+                        return slide_idx, slide, shape, shape_text, char_pos
                 return None
-            shape = sel.ShapeRange(1)
-            if _get_tag(shape, TAG_ROLE) == TAG_ROLE_FOOTER or not _shape_has_text_frame(shape):
+
+            if sel_type != PP_SELECTION_TEXT:
+                return None
+            shape = self._resolve_selected_shape(sel)
+            if (
+                shape is None
+                or _get_tag(shape, TAG_ROLE) == TAG_ROLE_FOOTER
+                or not _shape_has_text_frame(shape)
+            ):
                 return None
             try:
                 slide_idx = int(sel.SlideRange(1).SlideIndex)
@@ -799,10 +937,17 @@ class PowerPointSlideDoc:
             if not (1 <= slide_idx <= slide_count):
                 return None
             slide = pres.Slides(slide_idx)
+            body_shapes = self._list_body_text_shapes(slide)
+            if body_shapes and not any(self._same_shape(sh, shape) for sh in body_shapes):
+                return None
             shape_text = str(shape.TextFrame.TextRange.Text)
             try:
                 start_1based = int(sel.TextRange.Start)
-                char_pos = max(0, min(start_1based - 1, len(shape_text)))
+                try:
+                    sel_len = max(0, int(sel.TextRange.Length))
+                except Exception:
+                    sel_len = 0
+                char_pos = max(0, min(start_1based - 1 + sel_len, len(shape_text)))
             except Exception:
                 char_pos = len(shape_text)
             return slide_idx, slide, shape, shape_text, char_pos
@@ -896,10 +1041,15 @@ class PowerPointSlideDoc:
             if target_hwnd is not None:
                 if win32gui.IsIconic(target_hwnd):
                     win32gui.ShowWindow(target_hwnd, win32con.SW_RESTORE)
-                win32gui.SetForegroundWindow(target_hwnd)
+                try:
+                    win32gui.SetForegroundWindow(target_hwnd)
+                except Exception:
+                    pass
+                self._restore_last_insert_cursor()
                 return True
         except Exception:
             pass
+        self._restore_last_insert_cursor()
         return False
 
     def has_text_cursor(self) -> bool:
@@ -978,40 +1128,83 @@ class PowerPointSlideDoc:
     def _get_citations_by_shape(self, slide: Any) -> list[tuple[Any, list[Citation]]]:
         """Zwraca listę `(shape, citations_list)` dla wszystkich kształtów tekstowych slajdu.
 
-        Uwzględnia tag `AZP_CITATIONS` na poszczególnych kształtach oraz fallback
-        z tagu slajdu dla kształtów jeszcze nieotagowanych.
+        Uwzględnia tag `AZP_CITATIONS` na poszczególnych kształtach, odfiltrowuje cytowania
+        usunięte ręcznie z tekstu slajdu, sortuje cytowania według kolejności występowania
+        w tekście oraz obsługuje fallback z tagu slajdu.
         """
         body_shapes = self._list_body_text_shapes(slide)
         if not body_shapes:
             return []
 
-        shape_cits: list[list[Citation]] = [
+        raw_by_shape: list[list[Citation]] = [
             list(deserialize_citations(_get_tag(sh, TAG_CITATIONS)))
             for sh in body_shapes
         ]
+        had_any_shape_tags = any(bool(cits) for cits in raw_by_shape)
+        working_texts = [str(sh.TextFrame.TextRange.Text) for sh in body_shapes]
+
+        shape_cits: list[list[Citation]] = [[] for _ in body_shapes]
+        displaced: list[Citation] = []
+
+        for s_idx, raw_cits in enumerate(raw_by_shape):
+            if not raw_cits:
+                continue
+            sh_text = working_texts[s_idx]
+            located = _locate_citation_spans_in_text(sh_text, raw_cits)
+            located.sort(key=lambda item: item[2])
+            located_indices = {item[0] for item in located}
+            kept: list[Citation] = [item[1] for item in located]
+            for idx, cit in enumerate(raw_cits):
+                if idx in located_indices:
+                    continue
+                if not cit.text:
+                    kept.append(cit)
+                else:
+                    displaced.append(cit)
+            # Zamaskuj już dopasowane wystąpienia w working_texts[s_idx]
+            for _, _, start, end in sorted(located, key=lambda item: item[2], reverse=True):
+                working_texts[s_idx] = (
+                    f"{working_texts[s_idx][:start]}\ufffd{working_texts[s_idx][end:]}"
+                )
+            shape_cits[s_idx] = kept
+
         assigned_ids = {c.citation_id for cits in shape_cits for c in cits}
         slide_cits = deserialize_citations(_get_tag(slide, TAG_CITATIONS))
-        unassigned = [c for c in slide_cits if c.citation_id not in assigned_ids]
+        unassigned: list[Citation] = [
+            c for c in (*displaced, *slide_cits) if c.citation_id not in assigned_ids
+        ]
+        dedup_unassigned: list[Citation] = []
+        seen_unassigned_ids: set[str] = set()
+        for c in unassigned:
+            if c.citation_id not in seen_unassigned_ids:
+                seen_unassigned_ids.add(c.citation_id)
+                dedup_unassigned.append(c)
 
-        if unassigned:
-            working_texts = [str(sh.TextFrame.TextRange.Text) for sh in body_shapes]
-            for s_idx, cits in enumerate(shape_cits):
-                for existing in cits:
-                    if existing.text and existing.text in working_texts[s_idx]:
-                        working_texts[s_idx] = working_texts[s_idx].replace(
-                            existing.text, "\ufffd", 1
-                        )
-            for cit in unassigned:
+        if dedup_unassigned:
+            modified_shapes: set[int] = set()
+            for cit in dedup_unassigned:
                 placed = False
                 if cit.text:
                     for s_idx, txt in enumerate(working_texts):
                         if cit.text in txt:
                             working_texts[s_idx] = txt.replace(cit.text, "\ufffd", 1)
                             shape_cits[s_idx].append(cit)
+                            modified_shapes.add(s_idx)
                             placed = True
                             break
-                if not placed:
+                elif not had_any_shape_tags and not placed:
                     shape_cits[0].append(cit)
+
+            for s_idx in modified_shapes:
+                full_sh_text = str(body_shapes[s_idx].TextFrame.TextRange.Text)
+                located = _locate_citation_spans_in_text(full_sh_text, shape_cits[s_idx])
+                located.sort(key=lambda item: item[2])
+                located_indices = {item[0] for item in located}
+                ordered = [item[1] for item in located]
+                for idx, cit in enumerate(shape_cits[s_idx]):
+                    if idx not in located_indices and not cit.text:
+                        ordered.append(cit)
+                shape_cits[s_idx] = ordered
 
         return list(zip(body_shapes, shape_cits))
 
@@ -1187,14 +1380,17 @@ class PowerPointSlideDoc:
         tr.Font.Bold = MSO_FALSE
 
         for char_range in ranges:
-            if char_range.length > 0:
+            if char_range.length > 0 and (char_range.italic or char_range.bold):
                 sub = tr.Characters(char_range.start, char_range.length)
-                sub.Font.Italic = MSO_TRUE if char_range.italic else MSO_FALSE
-                sub.Font.Bold = MSO_TRUE if char_range.bold else MSO_FALSE
+                if char_range.italic:
+                    sub.Font.Italic = MSO_TRUE
+                if char_range.bold:
+                    sub.Font.Bold = MSO_TRUE
 
+        tf.AutoSize = PP_AUTOSIZE_SHAPE_TO_FIT_TEXT
+        tf.WordWrap = MSO_TRUE
         shape.Left = geom.left
         shape.Width = geom.width
-        tf.AutoSize = PP_AUTOSIZE_SHAPE_TO_FIT_TEXT
         actual_height = float(shape.Height) if float(shape.Height) > 0 else DEFAULT_FOOTER_HEIGHT_PT
         adjusted_geom = compute_footer_geometry(
             slide_width=slide_width,
@@ -1205,6 +1401,7 @@ class PowerPointSlideDoc:
         shape.Top = adjusted_geom.top
 
         _set_tag(shape, TAG_FOOTER_ENTRIES, serialize_footer_entries(entries))
+        self._restore_last_insert_cursor(only_slide_index=slide_index)
 
     def read_slides(self) -> list[SlideRecord]:
         """Odczytuje wszystkie slajdy w kolejności od 1 do N wraz z ich cytowaniami i stopkami."""
@@ -1218,10 +1415,7 @@ class PowerPointSlideDoc:
             slide = pres.Slides(idx)
             slide_id = int(slide.SlideID)
             by_shape = self._get_citations_by_shape(slide)
-            if by_shape:
-                citations = tuple(c for _, cits in by_shape for c in cits)
-            else:
-                citations = deserialize_citations(_get_tag(slide, TAG_CITATIONS))
+            citations = tuple(c for _, cits in by_shape for c in cits)
             footer_shape = self._find_footer_shape(slide)
             if footer_shape is not None:
                 footer_entries = deserialize_footer_entries(
