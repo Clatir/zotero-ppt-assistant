@@ -5,7 +5,8 @@
   - **Ciąg A – Fundament** (A1, A2).
   - **Ciąg B – Rdzeń** (Tor B1: **B1.1 Klient Zotero**, **B1.2 Okienko**; Tor B2: **B2.1 Warstwa PowerPoint**, **B2.2 Silnik numeracji i stylów** – wszystkie 4 etapy po przeglądach kodu `high`/`xhigh`, commity wypchnięte na GitHuba).
 - **Pełny zestaw testów po Ciągu B:** `84 passed` bez COM + `2 passed` COM (`-m com`).
-- **Następny krok:** **Ciąg C – Integracja i odbiór** (`C1 Integracja` → `C2 Dodatki` → `C3 Odbiór na Twojej prezentacji`) po słowie „dalej”.
+- **Przed ciągiem C:** pytania rozstrzygnięte i zapisane jako D15–D16.
+- **Następny krok:** **Ciąg C – Integracja i odbiór** (`C1 Integracja` → `C2 Dodatki`, a następnie pauza przed `C3 Odbiór na Twojej prezentacji`) po słowie „dalej”.
 
 ## Kolejka
 | Ciąg | Stan |

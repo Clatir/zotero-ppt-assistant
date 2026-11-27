@@ -16,3 +16,5 @@
 | D12 | 2026-11-27 | Publiczne repozytorium na GitHubie (`Clatir/zotero-ppt-assistant`), commity wypychane na bieżąco; bez danych użytkownika i osobistych treści (zastępuje D11). |
 | D13 | 2026-11-27 | Cytowania zbiorcze (np. `[1, 2]` lub `(Kowalski, 2023; Nowak, 2024)`): obsługiwany zarówno wielokrotny wybór na liście wyników w okienku (Ctrl/Shift), jak i automatyczne scalanie, gdy kursor przy wstawianiu stoi tuż przy istniejącym cytowaniu. |
 | D14 | 2026-11-27 | Zmiana stylu, trybu numeracji, czcionki, rozmiaru lub położenia stopki na liście wyboru w okienku od razu przebudowuje całą prezentację (po automatycznym utworzeniu kopii zapasowej `.bak.pptx`). |
+| D15 | 2026-11-27 | Skróty klawiszowe (C2): skróty wewnątrz okienka (`Enter` / `Ctrl+Enter` = *Cytuj* na liście wyników, `F5` / `Ctrl+R` = *Odśwież / Przenumeruj*, `Ctrl+F` = fokus na polu *Szukaj*), bez globalnego przechwytywania klawiatury w Windows. |
+| D16 | 2026-11-27 | Uruchamianie ikoną (C2): skrypt startowy `start_azp.bat` / `start_azp.pyw` (uruchamiający okienko bez czarnej konsoli w tle), bez pakowania do `.exe`. |
