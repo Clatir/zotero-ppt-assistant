@@ -4,8 +4,9 @@
 - **Zakończone ciągi / etapy:**
   - **Ciąg A – Fundament** (A1, A2).
   - **Ciąg B – Rdzeń** (Tor B1: **B1.1 Klient Zotero**, **B1.2 Okienko**; Tor B2: **B2.1 Warstwa PowerPoint**, **B2.2 Silnik numeracji i stylów**).
-  - **Ciąg C – Integracja i odbiór:** etapy kodowe **C1 Integracja** (`xhigh`), **C2 Dodatki** (`high`) oraz poprawki audytowe + **Tryb ciemny** (D21) + **Dodatek wstążki PowerPointa `.ppam`** (D22, T11, T12) + **Instalator i auto-aktualizacja w tle** (D23, D24, T13) zakończone, po przeglądach kodu, commity wypchnięte na GitHuba.
-- **Pełny zestaw testów:** `155 passed` bez COM + `3 passed` COM (`-m com`).
+  - **Ciąg C – Integracja i odbiór:** etapy kodowe **C1 Integracja** (`xhigh`), **C2 Dodatki** (`high`) oraz poprawki audytowe + **Tryb ciemny** (D21) + **Dodatek wstążki PowerPointa `.ppam`** (D22, T11, T12) + **Instalator i auto-aktualizacja w tle** (D23, D24, T13) zakończone.
+  - **Ciąg D – Kolekcje Zotero, cytowanie bez kursora i bibliografia:** etapy **D1 Kontrakty i atrapy**, **D2.1 Kolekcje Zotero i GUI (Tor B1)** (`high`, 2 rundy) oraz **D2.2 Warstwa PowerPoint i silnik (Tor B2)** (`xhigh`, 2 rundy) zakończone, commity wypchnięte na GitHuba.
+- **Pełny zestaw testów:** `176 passed` bez COM + `3 passed` COM (`-m com`).
 - **Następny krok:** **Etap C3 Odbiór na Twojej prezentacji** (wspólny odbiór na żywo według listy w `docs/odbior.md`).
 
 ## Kolejka
@@ -14,8 +15,21 @@
 | A – Fundament | gotowe (A1, A2) |
 | B – Rdzeń (tory B1 i B2 równolegle) | gotowe (B1.1, B1.2, B2.1, B2.2) |
 | C – Integracja i odbiór | C1, C2 + poprawki audytu, tryb ciemny (D21), wstążka PP (D22) i auto-aktualizacja (D23, D24) gotowe; gotowe do C3 (Odbiór na Twojej prezentacji) |
+| D – Kolekcje Zotero, cytowanie bez kursora i bibliografia | gotowe (D1, D2.1, D2.2; D25–D27, T14) |
 
 ## Zrealizowane etapy
+
+### Ciąg D: Kolekcje Zotero, cytowanie bez kursora i bibliografia (2026-11-28)
+- **Zakres:**
+  - **D1 Kontrakty i atrapy (`azp/contracts.py`, `tests/fakes/fake_zotero.py`, `tests/fakes/fake_ppt.py`, `tests/test_contracts.py`):** dodano `ZoteroCollection`, flagę `Citation.in_text: bool = True`, `SlideRecord.has_bibliography: bool = False`, ustawienia bibliografii w `Settings` (`bib_font_name`, `bib_font_size_pt`, `bib_fit_mode: BibFitMode`, `bib_columns: 1..4`) oraz metody `list_collections`, `search_items(..., collection_key=...)`, `add_footer_citation` i `set_slide_bibliography`.
+  - **D2.1 Kolekcje Zotero i GUI – Tor B1 (`azp/zotero/client.py`, `azp/gui/app.py`, `azp/gui/__init__.py`, `tests/test_zotero.py`, `tests/test_gui.py`):**
+    1. *Wybór kolekcji Zotero (D25)*: pobieranie kolekcji i podkolekcji z `/collections` z budowaniem hierarchicznych ścieżek `"Rodzic / Podkolekcja"` i ochroną przed cyklami, filtrowanie `/collections/<KEY>/items/top`, rozwijana lista `Kolekcja:` w okienku z opcją `"Wszystkie pozycje (cała biblioteka)"`, rozróżnianie duplikatów nazw kolekcji kluczem `(KEY)` (H1) oraz automatyczne dociąganie listy kolekcji po włączeniu Zotero w trakcie działania okienka (M1).
+    2. *Przycisk „Wstaw bibliografię” i ustawienia bibliografii w okienku (D27)*: przycisk `Wstaw bibliografię` oraz listy wyboru czcionki bibliografii, rozmiaru czcionki (`pt`), trybu dopasowania (*Zmniejsz czcionkę do slajdu (Auto-fit)*, *Stała czcionka (dopasuj ramkę do tekstu)*, *Podziel automatycznie na kolejne slajdy*) i liczby kolumn na slajdzie (`1..4`), z natychmiastową przebudową D14, wycofaniem przy niezapisanej prezentacji D18 i synchronizacją przy przełączeniu prezentacji D19 (M2, M3).
+  - **D2.2 Warstwa PowerPoint i silnik – Tor B2 (`azp/ppt/com_doc.py`, `azp/ppt/__init__.py`, `azp/engine/numbering.py`, `azp/engine/service.py`, `azp/main.py`, `tests/test_ppt.py`, `tests/test_engine.py`, `tests/test_main.py`):**
+    1. *Cytowanie bez kursora i na slajdach ze zdjęciami (D26, zastępuje D10)*: gdy kursor nie stoi w polu tekstowym (lub na slajdzie są same zdjęcia/obiekty bez tekstu), *Cytuj* dodaje przypis bezpośrednio do stopki na dole aktywnego slajdu (`add_footer_citation`, `Citation.in_text=False`) bez wstawiania znacznika w treść slajdu, nadaje mu numer `[n]` wg kolejności slajdów (lub format APA), czyści zapamiętany stary kursor tekstowy (H1) i zachowuje spójną kolejność `(*in_text, *footer_only)` (M1).
+    2. *Wielokolumnowa bibliografia bez nagłówka z dopasowaniem (D27, zastępuje D6, T14)*: `build_presentation_bibliography_entries`, `CitationEngine.insert_bibliography` i `PowerPointSlideDoc.set_slide_bibliography` wstawiają na aktywnym slajdzie spis wszystkich wykorzystanych źródeł bez żadnego nagłówka, dzieląc wpisy na `1..4` kolumny (`TAG_ROLE_BIBLIOGRAPHY`) z obsługą `shrink_to_fit` (jednorodne zmniejszanie czcionki do wysokości slajdu), `fixed_font` oraz `split_slides` (automatyczne slajdy kontynuacji `TAG_BIB_CONTINUATION` z korektą indeksów kolejnych slajdów H2) oraz automatyczną aktualizacją bibliografii przy `cite()` i `rebuild()`.
+- **Decyzje:** D25–D27 (D26 zastępuje D10, D27 zastępuje D6), T14.
+- **Testy:** `pytest -q` (`176 passed`), `pytest -q -m com` (`3 passed`).
 
 ### Audyt kodu, Tryb ciemny, Dodatek wstążki PowerPointa i Auto-aktualizacja (2026-11-27)
 - **Zakres:**

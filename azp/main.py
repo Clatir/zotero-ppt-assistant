@@ -55,6 +55,7 @@ def build_window(
 
     raw_on_cite = engine.make_cite_callback()
     raw_on_rebuild = engine.make_rebuild_callback()
+    raw_on_bibliography = engine.make_bibliography_callback()
 
     def _on_cite(keys: tuple[str, ...], current_settings: Settings) -> str | None:
         try:
@@ -80,6 +81,14 @@ def build_window(
         except Exception as exc:
             raise AzpError(f"PowerPoint zgłosił błąd: {describe_error(exc)}") from exc
 
+    def _on_bibliography(current_settings: Settings) -> str | None:
+        try:
+            return raw_on_bibliography(current_settings)
+        except AzpError:
+            raise
+        except Exception as exc:
+            raise AzpError(f"PowerPoint zgłosił błąd: {describe_error(exc)}") from exc
+
     return AzpWindow(
         zotero=zot,
         slide_doc=doc,
@@ -87,6 +96,7 @@ def build_window(
         master=master,
         on_cite=_on_cite,
         on_rebuild=_on_rebuild,
+        on_bibliography=_on_bibliography,
         initial_search=initial_search,
         poll_interval_ms=poll_interval_ms,
         config_path=config_path,

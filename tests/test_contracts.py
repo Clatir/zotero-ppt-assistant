@@ -215,3 +215,56 @@ def test_fake_slide_doc_update_citations_handles_swaps_and_duplicates() -> None:
     )
     assert doc.get_slide_body_text(1) == "Tekst slajdu 1 [2] [1]"
 
+
+def test_collections_footer_citation_and_bibliography_contracts() -> None:
+    zotero = FakeZoteroSource()
+    cols = zotero.list_collections()
+    assert [c.key for c in cols] == ["COL_AI", "COL_ML", "COL_ETH"]
+    assert cols[1].parent_key == "COL_AI"
+
+    eth_items = zotero.search_items("", collection_key="COL_ETH")
+    assert [i.key for i in eth_items] == ["KOWAL2023", "DOVE2013"]
+
+    ml_filtered = zotero.search_items("Zieliński", collection_key="COL_ML")
+    assert [i.key for i in ml_filtered] == ["ZIEL2022"]
+
+    s = Settings(
+        bib_font_name="Times New Roman",
+        bib_font_size_pt=14,
+        bib_fit_mode="split_slides",
+        bib_columns=2,
+    )
+    assert Settings.from_dict(s.to_dict()) == s
+
+    with pytest.raises(ValueError, match="czcionki bibliografii"):
+        Settings(bib_font_name="  ")
+    with pytest.raises(ValueError, match="czcionki bibliografii"):
+        Settings(bib_font_size_pt=5)
+    with pytest.raises(ValueError, match="dopasowania bibliografii"):
+        Settings(bib_fit_mode="bad")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="kolumn bibliografii"):
+        Settings(bib_columns=5)
+
+    doc = FakeSlideDoc(slide_count=2, active_slide_index=1, has_cursor=False)
+    doc.add_footer_citation(Citation(citation_id="fc-1", keys=("KOWAL2023",), text="", in_text=False))
+    doc.add_footer_citation(Citation(citation_id="fc-2", keys=("NOWAK2024",), text="", in_text=False))
+    slide1 = doc.read_slides()[0]
+    assert len(slide1.citations) == 1
+    assert slide1.citations[0].in_text is False
+    assert slide1.citations[0].keys == ("KOWAL2023", "NOWAK2024")
+    assert doc.get_slide_body_text(1) == "Tekst slajdu 1"
+
+    entries = [
+        FooterEntry(key="KOWAL2023", prefix="[1] ", spans=(TextSpan("Kowalski 2023"),)),
+        FooterEntry(key="NOWAK2024", prefix="[2] ", spans=(TextSpan("Nowak 2024"),)),
+        FooterEntry(key="DOVE2013", prefix="[3] ", spans=(TextSpan("Dove 2013"),)),
+    ]
+    used_slides = doc.set_slide_bibliography(2, entries, Settings(bib_columns=2))
+    assert used_slides == 1
+    assert doc.read_slides()[1].has_bibliography is True
+    cols_on_slide = doc.get_slide_bibliography_columns(2)
+    assert len(cols_on_slide) == 2
+    assert [e.key for e in cols_on_slide[0]] == ["KOWAL2023", "NOWAK2024"]
+    assert [e.key for e in cols_on_slide[1]] == ["DOVE2013"]
+
+

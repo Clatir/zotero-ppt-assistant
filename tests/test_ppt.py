@@ -42,11 +42,26 @@ from azp.ppt import (
 )
 from azp.contracts import BackupError
 from azp.ppt.com_doc import (
+    BIB_COLUMN_GAP_PT,
+    BIB_MARGIN_BOTTOM_PT,
+    BIB_MARGIN_TOP_PT,
+    BIB_MARGIN_X_PT,
+    PP_SELECTION_NONE,
+    PP_SELECTION_SHAPES,
+    PP_SELECTION_SLIDES,
+    TAG_BIB_COLUMN,
+    TAG_BIB_CONTINUATION,
+    TAG_FOOTER_ENTRIES,
+    TAG_ROLE_BIBLIOGRAPHY,
     TextEdit,
     apply_text_edits,
     choose_powerpoint_window,
+    compute_bibliography_column_geometries,
+    estimate_bibliography_font_size,
     plan_citation_insert,
     plan_citation_replacements,
+    split_bibliography_entries_across_slides,
+    split_bibliography_entries_into_columns,
 )
 from tests.fakes.fake_com import MockPresentation, MockShape, MockSlide, MockTextRange
 
@@ -1129,6 +1144,378 @@ def test_powerpoint_addin_ppam_and_vbs_builder(tmp_path: Path) -> None:
     assert is_powerpoint_addin_installed(addin_dir=addin_dir, check_hkcu=False) is False
 
 
+def test_add_footer_citation_on_picture_only_and_text_slides_d26() -> None:
+    """D26: add_footer_citation działa na slajdzie ze samymi zdjęciami (brak pól tekstowych) oraz z polami tekstowymi."""
+    # Slajd 1: tylko zdjęcie (HasTextFrame = 0, brak jakichkolwiek body_shapes)
+    picture_shape = MockShape("Picture1", "", has_text_frame=0)
+    slide1 = MockSlide([picture_shape], slide_id=101)
+    # Slajd 2: zwykłe pole tekstowe z cytowaniem w tekście
+    body_shape = MockShape("Body2", "Tekst z cytowaniem")
+    slide2 = MockSlide([body_shape], slide_id=102)
+    pres = MockPresentation([slide1, slide2])
+    doc = PowerPointSlideDoc(presentation=pres, active_slide_index=1)
+
+    assert doc.has_text_cursor() is False
+    c_foot1 = Citation(citation_id="cf1", keys=("KOWAL2023",), text="", in_text=False)
+    doc.add_footer_citation(c_foot1)
+
+    slides = doc.read_slides()
+    assert len(slides[0].citations) == 1
+    assert slides[0].citations[0] == c_foot1
+
+    # Kolejne wywołanie add_footer_citation na tym samym slajdzie scala klucze
+    c_foot2 = Citation(citation_id="cf2", keys=("NOWAK2024", "KOWAL2023"), text="", in_text=False)
+    doc.add_footer_citation(c_foot2)
+    slides = doc.read_slides()
+    assert len(slides[0].citations) == 1
+    assert slides[0].citations[0] == Citation(
+        citation_id="cf1",
+        keys=("KOWAL2023", "NOWAK2024"),
+        text="",
+        in_text=False,
+    )
+
+    # Slajd 2: najpierw cytowanie w tekście (z kursorem), potem cytowanie stopkowe (bez kursora)
+    doc.set_cursor_target(2, "Body2", None)
+    c_in = Citation(citation_id="cin1", keys=("DOVE2013",), text="[3]", in_text=True)
+    doc.insert_citation_at_cursor(c_in)
+    assert body_shape.TextFrame.TextRange.Text == "Tekst z cytowaniem [3]"
+
+    doc.clear_cursor_target()
+    doc.set_active_slide(2)
+    c_foot_s2 = Citation(citation_id="cf_s2", keys=("ZIEL2022",), text="", in_text=False)
+    doc.add_footer_citation(c_foot_s2)
+
+    assert body_shape.TextFrame.TextRange.Text == "Tekst z cytowaniem [3]"
+    s2_cits = doc.read_slides()[1].citations
+    assert s2_cits == (c_in, c_foot_s2)
+
+    # update_slide_citations aktualizuje tekst dla in_text=True i zachowuje in_text=False na slajdzie
+    doc.update_slide_citations(
+        2,
+        [
+            Citation(citation_id="cin1", keys=("DOVE2013",), text="(Dove et al., 2013)", in_text=True),
+            c_foot_s2,
+        ],
+    )
+    assert body_shape.TextFrame.TextRange.Text == "Tekst z cytowaniem (Dove et al., 2013)"
+    assert doc.read_slides()[1].citations == (
+        Citation(citation_id="cin1", keys=("DOVE2013",), text="(Dove et al., 2013)", in_text=True),
+        c_foot_s2,
+    )
+
+
+def test_get_active_slide_index_with_picture_slide_or_none_selection_d26() -> None:
+    """D26: get_active_slide_index wykrywa slajd przy zaznaczonym zdjęciu, miniaturze slajdu i braku zaznaczenia."""
+    pic = MockShape("Pic", "", has_text_frame=0)
+    slide1 = MockSlide([MockShape("Body1", "A")], slide_id=101)
+    slide2 = MockSlide([pic], slide_id=102)
+    pres = MockPresentation([slide1, slide2])
+
+    class _View:
+        Slide = slide2
+
+    class _Sel:
+        Type = PP_SELECTION_SHAPES
+
+        def SlideRange(self, idx: int) -> MockSlide:
+            _ = idx
+            return slide2
+
+        def ShapeRange(self, idx: int) -> MockShape:
+            _ = idx
+            return pic
+
+    class _Win:
+        Selection = _Sel()
+        View = _View()
+
+    class _App:
+        ActiveWindow = _Win()
+        ActivePresentation = pres
+
+        class Presentations:
+            Count = 1
+
+    doc = PowerPointSlideDoc(app=_App(), presentation=pres)
+    assert doc.get_active_slide_index() == 2
+
+    # Zaznaczona miniatura slajdu (PP_SELECTION_SLIDES)
+    _Sel.Type = PP_SELECTION_SLIDES
+    assert doc.get_active_slide_index() == 2
+
+    # Brak zaznaczenia (PP_SELECTION_NONE), gdzie SlideRange rzuca błąd COM, a View.Slide wskazuje slajd 2
+    class _EmptySel:
+        Type = PP_SELECTION_NONE
+
+        def SlideRange(self, idx: int) -> MockSlide:
+            raise RuntimeError("Nothing selected")
+
+    _Win.Selection = _EmptySel()  # type: ignore[assignment]
+    assert doc.get_active_slide_index() == 2
+
+
+def test_bibliography_layout_helpers_columns_fit_and_split_d27() -> None:
+    """D27: czyste funkcje podziału na 1..4 kolumny, geometrii, zmniejszania czcionki i podziału na slajdy."""
+    entries = [
+        FooterEntry(
+            key=f"K{i}",
+            prefix=f"[{i}] ",
+            spans=(TextSpan(f"Autor {i}, Tytuł pracy naukowej numer {i}, Wydawnictwo 202{i % 10}."),),
+        )
+        for i in range(1, 8)
+    ]
+
+    # Podział 7 wpisów na 1, 2, 3, 4 kolumny
+    assert [len(c) for c in split_bibliography_entries_into_columns(entries, 1)] == [7]
+    assert [len(c) for c in split_bibliography_entries_into_columns(entries, 2)] == [4, 3]
+    assert [len(c) for c in split_bibliography_entries_into_columns(entries, 3)] == [3, 2, 2]
+    assert [len(c) for c in split_bibliography_entries_into_columns(entries, 4)] == [2, 2, 2, 1]
+    assert split_bibliography_entries_into_columns([], 2) == []
+
+    with pytest.raises(ValueError):
+        split_bibliography_entries_into_columns(entries, 5)
+
+    # Geometria kolumn na slajdzie 960 x 540
+    geoms_3 = compute_bibliography_column_geometries(960.0, 540.0, 3)
+    assert len(geoms_3) == 3
+    expected_w = (960.0 - 2 * BIB_MARGIN_X_PT - 2 * BIB_COLUMN_GAP_PT) / 3.0
+    expected_h = 540.0 - BIB_MARGIN_TOP_PT - BIB_MARGIN_BOTTOM_PT
+    for idx, g in enumerate(geoms_3):
+        assert g.top == BIB_MARGIN_TOP_PT
+        assert g.width == pytest.approx(expected_w)
+        assert g.height == pytest.approx(expected_h)
+        assert g.left == pytest.approx(BIB_MARGIN_X_PT + idx * (expected_w + BIB_COLUMN_GAP_PT))
+
+    # estimate_bibliography_font_size: mała lista nie zmniejsza czcionki, duża lista zmniejsza
+    assert estimate_bibliography_font_size(entries[:3], 960.0, 540.0, 12, 1) == 12
+    many_entries = [
+        FooterEntry(
+            key=f"M{i}",
+            prefix=f"[{i}] ",
+            spans=(TextSpan("Bardzo długi opis bibliograficzny " * 5),),
+        )
+        for i in range(1, 25)
+    ]
+    shrunk_1col = estimate_bibliography_font_size(many_entries, 960.0, 540.0, 16, 1)
+    shrunk_2col = estimate_bibliography_font_size(many_entries, 960.0, 540.0, 16, 2)
+    assert 6 <= shrunk_1col < 16
+    assert shrunk_2col >= shrunk_1col
+
+    # split_bibliography_entries_across_slides: dzieli dużą listę na wiele slajdów
+    slide_chunks = split_bibliography_entries_across_slides(many_entries, 960.0, 540.0, 16, 1)
+    assert len(slide_chunks) > 1
+    assert [e for chunk in slide_chunks for e in chunk] == many_entries
+
+
+def test_set_slide_bibliography_no_header_columns_and_modes_d27() -> None:
+    """D27: set_slide_bibliography tworzy kolumny bez nagłówka 'Źródła:', obsługuje czcionki i tryby dopasowania."""
+    slide1 = MockSlide([MockShape("Body1", "Slajd 1")], slide_id=101)
+    slide2 = MockSlide([], slide_id=102)
+    pres = MockPresentation([slide1, slide2])
+    doc = PowerPointSlideDoc(presentation=pres, active_slide_index=2)
+
+    entries = [
+        FooterEntry(
+            key=f"K{i}",
+            prefix=f"[{i}] ",
+            spans=(
+                TextSpan(f"A. Autor {i}, "),
+                TextSpan(f"Czasopismo {i}", italic=True),
+                TextSpan(", 2024."),
+            ),
+        )
+        for i in range(1, 6)
+    ]
+
+    # 1. Tryb fixed_font w 2 kolumnach bez nagłówka
+    settings_2col = Settings(
+        bib_font_name="Georgia",
+        bib_font_size_pt=14,
+        bib_fit_mode="fixed_font",
+        bib_columns=2,
+    )
+    used = doc.set_slide_bibliography(2, entries, settings_2col)
+    assert used == 1
+    assert pres.Slides.Count == 2
+
+    bib_shapes = [
+         slide2.Shapes(i)
+        for i in range(1, slide2.Shapes.Count + 1)
+        if slide2.Shapes(i).Tags(TAG_ROLE) == TAG_ROLE_BIBLIOGRAPHY
+    ]
+    assert len(bib_shapes) == 2
+    assert bib_shapes[0].Tags(TAG_BIB_COLUMN) == "1"
+    assert bib_shapes[1].Tags(TAG_BIB_COLUMN) == "2"
+    for sh in bib_shapes:
+        assert not sh.TextFrame.TextRange.Text.startswith(FOOTER_HEADER_TEXT)
+        assert sh.TextFrame.TextRange.Font.Name == "Georgia"
+        assert sh.TextFrame.TextRange.Font.Size == 14
+        # Sprawdzenie ustawienia kursywy na podzakresie
+        assert any(italic == -1 for _, _, italic, _ in sh.TextFrame.TextRange.subrange_formats)
+
+    slides_read = doc.read_slides()
+    assert slides_read[0].has_bibliography is False
+    assert slides_read[1].has_bibliography is True
+
+    # 2. Tryb split_slides z dużą czcionką -> tworzy slajdy kontynuacji z TAG_BIB_CONTINUATION="1"
+    many_entries = [
+        FooterEntry(
+            key=f"L{i}",
+            prefix=f"[{i}] ",
+            spans=(TextSpan("Obszerny wpis bibliograficzny w spisie literatury " * 4),),
+        )
+        for i in range(1, 15)
+    ]
+    settings_split = Settings(
+        bib_font_name="Calibri",
+        bib_font_size_pt=20,
+        bib_fit_mode="split_slides",
+        bib_columns=1,
+    )
+    used_split = doc.set_slide_bibliography(2, many_entries, settings_split)
+    assert used_split > 1
+    assert pres.Slides.Count == 1 + used_split
+    for cont_idx in range(3, pres.Slides.Count + 1):
+        assert pres.Slides(cont_idx).Tags(TAG_BIB_CONTINUATION) == "1"
+    # Slajdy kontynuacji mają has_bibliography=False, a główny slajd bibliografii ma True
+    records_split = doc.read_slides()
+    assert records_split[1].has_bibliography is True
+    assert all(not r.has_bibliography for r in records_split[2:])
+
+    # 3. Ponowna aktualizacja w trybie shrink_to_fit (4 kolumny) usuwa stare slajdy kontynuacji
+    settings_shrink_4col = Settings(
+        bib_font_name="Tahoma",
+        bib_font_size_pt=18,
+        bib_fit_mode="shrink_to_fit",
+        bib_columns=4,
+    )
+    used_shrink = doc.set_slide_bibliography(2, many_entries, settings_shrink_4col)
+    assert used_shrink == 1
+    assert pres.Slides.Count == 2
+    bib_shapes_4 = [
+        slide2.Shapes(i)
+        for i in range(1, slide2.Shapes.Count + 1)
+        if slide2.Shapes(i).Tags(TAG_ROLE) == TAG_ROLE_BIBLIOGRAPHY
+    ]
+    assert len(bib_shapes_4) == 4
+    assert all(sh.TextFrame.TextRange.Font.Size <= 18 for sh in bib_shapes_4)
+
+    # 4. Wyczyszczenie bibliografii (entries=[]) usuwa kształty bibliografii i zwraca 0
+    assert doc.set_slide_bibliography(2, [], settings_shrink_4col) == 0
+    assert doc.read_slides()[1].has_bibliography is False
+
+
+def test_add_footer_citation_after_in_text_citation_does_not_restore_stale_cursor_d26() -> None:
+    """H1: po cytowaniu w tekście, odznaczeniu kursora i add_footer_citation stary kursor nie jest przywracany."""
+    shape = MockShape("Body", "Treść slajdu")
+    slide = MockSlide([shape], slide_id=101)
+    pres = MockPresentation([slide])
+    tr = shape.TextFrame.TextRange
+
+    class _View:
+        Slide = slide
+
+    class _Sel:
+        Type = PP_SELECTION_TEXT
+        TextRange = MockTextRange("", start=len("Treść slajdu") + 1)
+
+        def ShapeRange(self, idx: int) -> MockShape:
+            _ = idx
+            return shape
+
+        def SlideRange(self, idx: int) -> MockSlide:
+            _ = idx
+            return slide
+
+    sel = _Sel()
+
+    class _Win:
+        Selection = sel
+        View = _View()
+
+        def Activate(self) -> None:
+            pass
+
+    class _App:
+        ActiveWindow = _Win()
+        ActivePresentation = pres
+        Visible = -1
+
+        class Presentations:
+            Count = 1
+
+    doc = PowerPointSlideDoc(app=_App(), presentation=pres)
+    assert doc.has_text_cursor() is True
+    doc.insert_citation_at_cursor(Citation("c1", ("K1",), "[1]", in_text=True))
+    assert tr.Text == "Treść slajdu [1]"
+    assert tr.selected_at == len("Treść slajdu [1]") + 1
+
+    # Użytkownik odznacza pole tekstowe (PP_SELECTION_NONE) i dodaje cytowanie stopkowe bez kursora
+    sel.Type = PP_SELECTION_NONE
+    tr.selected_at = None
+    assert doc.has_text_cursor() is False
+
+    doc.add_footer_citation(Citation("cf", ("K2",), "", in_text=False))
+    doc.set_slide_footer(
+        1,
+        [
+            FooterEntry("K1", (TextSpan("Opis 1"),), prefix="[1] "),
+            FooterEntry("K2", (TextSpan("Opis 2"),), prefix="[2] "),
+        ],
+        Settings(),
+    )
+    doc.focus_presentation_window()
+
+    # Stary kursor w polu tekstowym nie może zostać przywrócony
+    assert tr.selected_at is None
+
+
+def test_set_slide_bibliography_on_continuation_slide_and_index_shift_h2() -> None:
+    """H2: wywołanie set_slide_bibliography na slajdzie kontynuacji cofa do głównego slajdu i aktualizuje indeksy."""
+    slide1 = MockSlide([MockShape("Body1", "Slajd 1")], slide_id=101)
+    slide2 = MockSlide([], slide_id=102)
+    slide3 = MockSlide([MockShape("Body3", "Slajd 3")], slide_id=103)
+    pres = MockPresentation([slide1, slide2, slide3])
+    doc = PowerPointSlideDoc(presentation=pres, active_slide_index=3)
+
+    many_entries = [
+        FooterEntry(
+            key=f"L{i}",
+            prefix=f"[{i}] ",
+            spans=(TextSpan("Obszerny wpis bibliograficzny w spisie literatury " * 4),),
+        )
+        for i in range(1, 10)
+    ]
+    settings_split = Settings(
+        bib_font_name="Calibri",
+        bib_font_size_pt=24,
+        bib_fit_mode="split_slides",
+        bib_columns=1,
+    )
+    # Wstawiamy wieloslajdową bibliografię na slajdzie 2 (przed slajdem 3!)
+    used = doc.set_slide_bibliography(2, many_entries, settings_split)
+    assert used > 1
+    added = used - 1
+    # Aktywny slajd (dawny slajd 3, slide_id=103) przesunął się o `added` pozycji
+    assert doc.get_active_slide_index() == 3 + added
+    assert pres.Slides(3 + added).SlideID == 103
+
+    # Wywołanie set_slide_bibliography na slajdzie kontynuacji (indeks 3) aktualizuje główny slajd 2
+    settings_single = Settings(
+        bib_font_name="Calibri",
+        bib_font_size_pt=12,
+        bib_fit_mode="shrink_to_fit",
+        bib_columns=2,
+    )
+    used_after = doc.set_slide_bibliography(3, many_entries[:3], settings_single)
+    assert used_after == 1
+    assert pres.Slides.Count == 3
+    assert doc.get_active_slide_index() == 3
+    assert pres.Slides(3).SlideID == 103
+    assert doc.read_slides()[1].has_bibliography is True
+
+
 # ---------------------------------------------------------------------------
 # Testy integracyjne COM (@pytest.mark.com)
 # ---------------------------------------------------------------------------
@@ -1396,6 +1783,29 @@ def test_powerpoint_com_b21_full_workflow() -> None:
         # Usunięcie stopki gdy entries=[]
         reopened_doc.set_slide_footer(2, [], saved_settings)
         assert reopened_doc.read_slides()[1].footer_entries == ()
+
+        # --- 8. Cytowanie stopkowe bez kursora (D26) i bibliografia na slajdzie (D27) ---
+        reopened_doc.clear_cursor_target()
+        reopened_doc.set_active_slide(2)
+        assert reopened_doc.has_text_cursor() is False
+        reopened_doc.add_footer_citation(
+            Citation(citation_id="foot-com-1", keys=("DOVE2013",), text="", in_text=False)
+        )
+        s2_cits_after_foot = reopened_doc.read_slides()[1].citations
+        assert any(not c.in_text and c.keys == ("DOVE2013",) for c in s2_cits_after_foot)
+
+        bib_slide = pres.Slides.Add(3, 12)
+        _ = bib_slide
+        bib_settings = Settings(
+            style_id=STYLE_IEEE_V4,
+            bib_font_name="Calibri",
+            bib_font_size_pt=11,
+            bib_fit_mode="shrink_to_fit",
+            bib_columns=2,
+        )
+        slides_used = reopened_doc.set_slide_bibliography(3, entries_s1, bib_settings)
+        assert slides_used == 1
+        assert reopened_doc.read_slides()[2].has_bibliography is True
 
         pres.Save()
         pres.Close()

@@ -10,6 +10,7 @@ from azp.contracts import (
     FormattedRef,
     StyleInfo,
     TextSpan,
+    ZoteroCollection,
     ZoteroItem,
     ZoteroOfflineError,
 )
@@ -145,6 +146,26 @@ def _default_formatted_refs() -> dict[tuple[str, str], FormattedRef]:
     }
 
 
+def _default_collections() -> list[ZoteroCollection]:
+    return [
+        ZoteroCollection(key="COL_AI", name="Sztuczna inteligencja"),
+        ZoteroCollection(
+            key="COL_ML",
+            name="Sztuczna inteligencja / Uczenie maszynowe",
+            parent_key="COL_AI",
+        ),
+        ZoteroCollection(key="COL_ETH", name="Etyka i prawo"),
+    ]
+
+
+def _default_collection_items() -> dict[str, set[str]]:
+    return {
+        "COL_AI": {"KOWAL2023", "NOWAK2024", "ZIEL2022"},
+        "COL_ML": {"NOWAK2024", "ZIEL2022"},
+        "COL_ETH": {"DOVE2013", "KOWAL2023"},
+    }
+
+
 class FakeZoteroSource:
     """Atrapa źródła Zotero implementująca protokół `ZoteroSource`."""
 
@@ -153,12 +174,22 @@ class FakeZoteroSource:
         items: Sequence[ZoteroItem] | None = None,
         refs: dict[tuple[str, str], FormattedRef] | None = None,
         offline: bool = False,
+        collections: Sequence[ZoteroCollection] | None = None,
+        collection_items: dict[str, set[str]] | None = None,
     ) -> None:
         self._items: list[ZoteroItem] = list(items) if items is not None else _default_items()
         self._refs: dict[tuple[str, str], FormattedRef] = (
             dict(refs) if refs is not None else _default_formatted_refs()
         )
         self.offline: bool = offline
+        self._collections: list[ZoteroCollection] = (
+            list(collections) if collections is not None else _default_collections()
+        )
+        self._collection_items: dict[str, set[str]] = (
+            {k: set(v) for k, v in collection_items.items()}
+            if collection_items is not None
+            else _default_collection_items()
+        )
         self._styles: list[StyleInfo] = [
             StyleInfo(
                 style_id=STYLE_IEEE_V4,
@@ -181,14 +212,30 @@ class FakeZoteroSource:
     def is_available(self) -> bool:
         return not self.offline
 
-    def search_items(self, query: str = "", limit: int = 25) -> list[ZoteroItem]:
+    def list_collections(self) -> list[ZoteroCollection]:
         self._check_online()
+        return list(self._collections)
+
+    def search_items(
+        self,
+        query: str = "",
+        limit: int = 25,
+        collection_key: str | None = None,
+    ) -> list[ZoteroItem]:
+        self._check_online()
+        col_key = (collection_key or "").strip()
+        if col_key:
+            allowed_keys = self._collection_items.get(col_key, set())
+            source_items = [item for item in self._items if item.key in allowed_keys]
+        else:
+            source_items = self._items
+
         q = query.strip().casefold()
         if not q:
-            return self._items[:limit]
+            return source_items[:limit]
 
         results: list[ZoteroItem] = []
-        for item in self._items:
+        for item in source_items:
             haystack = " ".join(
                 [item.title, item.year, *item.authors, item.key]
             ).casefold()

@@ -28,4 +28,11 @@ Tor B1 = B1.1 → B1.2; tor B2 = B2.1 → B2.2; tory równolegle, rozłączne ka
 | C2 Dodatki | kod | subagent `flash` | high | 20–30 min | skrót klawiszowy, `config.json`, uruchamianie ikoną (`.bat`, opcjonalnie `.exe`) |
 | C3 Odbiór na Twojej prezentacji | odbiór | Ty + główna sesja | – | 30–60 min | wszystkie punkty w `docs/odbior.md` odebrane |
 
-**Łącznie:** ~3–4 h zegarowo (ciąg B równolegle).
+## Ciąg D – Kolekcje Zotero, cytowanie bez kursora i bibliografia
+| Etap | Rodzaj | Wykonawca | Przegląd | Szacunek | Gotowe, gdy |
+|---|---|---|---|---|---|
+| D1 Kontrakty i atrapy (D25–D27) | kod | główna sesja (Opus 5.5) | high | 10 min | `ZoteroCollection`, `Citation.in_text`, pola bibliografii w `Settings` (`bib_font_name`, `bib_font_size_pt`, `bib_fit_mode`, `bib_columns`), metody w `ZoteroSource` i `SlideDoc` oraz atrapy `FakeZoteroSource` i `FakeSlideDoc` |
+| D2.1 Kolekcje Zotero i GUI (Tor B1) | kod | subagent `inherit` | high | 25 min | wybór kolekcji Zotero w `ZoteroClient` i `AzpWindow`; cytowanie bez kursora w `AzpController`; przycisk *Wstaw bibliografię* oraz kontrolki czcionki, rozmiaru, dopasowania (fit) i liczby kolumn bibliografii |
+| D2.2 Warstwa PowerPoint i silnik (Tor B2) | kod | subagent `inherit` | **xhigh** | 30 min | `add_footer_citation` na slajdach bez kursora / ze samymi zdjęciami; `build_presentation_bibliography_entries`, `insert_bibliography` i auto-aktualizacja bibliografii w `CitationEngine`; wielokolumnowa bibliografia bez nagłówka z 3 trybami dopasowania w `PowerPointSlideDoc` + testy COM |
+
+**Łącznie:** ~3–4 h zegarowo (ciąg B równolegle) + ~1 h (ciąg D).

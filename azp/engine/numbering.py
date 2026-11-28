@@ -185,12 +185,17 @@ def compute_presentation_plan(
             Citation(
                 citation_id=cit.citation_id,
                 keys=tuple(dict.fromkeys(cit.keys)),
-                text=format_citation_text(
-                    cit.keys,
-                    refs,
-                    is_numeric=numeric,
-                    number_map=slide_map,
+                text=(
+                    format_citation_text(
+                        cit.keys,
+                        refs,
+                        is_numeric=numeric,
+                        number_map=slide_map,
+                    )
+                    if cit.in_text
+                    else ""
                 ),
+                in_text=cit.in_text,
             )
             for cit in slide.citations
         )
@@ -206,7 +211,62 @@ def compute_presentation_plan(
                 slide_id=slide.slide_id,
                 citations=planned_citations,
                 footer_entries=planned_footer,
+                has_bibliography=slide.has_bibliography,
             )
         )
 
     return planned_slides
+
+
+def build_presentation_bibliography_entries(
+    slides: Sequence[SlideRecord],
+    refs: Mapping[str, FormattedRef],
+    settings: Settings,
+    styles: Sequence[StyleInfo] = (),
+) -> tuple[FooterEntry, ...]:
+    """Buduje pełny spis wykorzystanych źródeł (bibliografię) z całej prezentacji (D27).
+
+    - Zbiera wszystkie unikalne klucze cytowań ze wszystkich slajdów w kolejności pierwszego wystąpienia.
+    - Dla stylu numerycznego (IEEE v4): używa globalnej numeracji `1..K` i sortuje rosnąco po numerze.
+    - Dla stylu autor-rok (APA 7): sortuje alfabetycznie bez prefiksu `[n]`.
+    """
+    unique_keys = list(
+        dict.fromkeys(
+            key
+            for slide in slides
+            for citation in slide.citations
+            for key in citation.keys
+        )
+    )
+    if not unique_keys:
+        return ()
+
+    numeric = is_numeric_style(settings.style_id, styles)
+    if numeric:
+        global_map = assign_global_numbers(slides)
+        ordered_keys = sorted(unique_keys, key=lambda key: global_map[key])
+        return tuple(
+            FooterEntry(
+                key=key,
+                prefix=f"[{global_map[key]}] ",
+                spans=refs[key].bib_body_spans,
+            )
+            for key in ordered_keys
+        )
+
+    ordered_keys = sorted(
+        unique_keys,
+        key=lambda key: (
+            refs[key].effective_sort_key,
+            refs[key].bib_plain.casefold(),
+            key,
+        ),
+    )
+    return tuple(
+        FooterEntry(
+            key=key,
+            prefix="",
+            spans=refs[key].bib_body_spans,
+        )
+        for key in ordered_keys
+    )

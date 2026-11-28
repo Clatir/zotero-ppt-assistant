@@ -1,6 +1,6 @@
 # Asystent Zotero dla PowerPointa (AZP)
 
-Pływające okienko dla systemu Windows do wstawiania cytowań z **Zotero** bezpośrednio do prezentacji **Microsoft PowerPoint**. Narzędzie obsługuje style cytowania **IEEE v4** oraz **APA 7**, automatycznie utrzymuje źródła w stopce pod slajdem, przenumerowuje cytowania w całej prezentacji, udostępnia przycisk **Asystent Zotero** bezpośrednio na wstążce PowerPointa oraz wspiera tryb ciemny.
+Pływające okienko dla systemu Windows do wstawiania cytowań z **Zotero** bezpośrednio do prezentacji **Microsoft PowerPoint**. Narzędzie obsługuje style cytowania **IEEE v4** oraz **APA 7**, wybór kolekcji Zotero, przypisy w stopce pod slajdem (także bez ustawiania kursora w tekście i na slajdach ze samymi zdjęciami), wielokolumnową bibliografię bez nagłówka z wyborem czcionki, rozmiaru i trybu dopasowania, przycisk **Asystent Zotero** na wstążce PowerPointa oraz tryb ciemny.
 
 ## Wymagania
 

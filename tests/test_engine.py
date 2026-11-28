@@ -23,6 +23,7 @@ from azp.engine import (
     CitationEngine,
     assign_global_numbers,
     assign_slide_numbers,
+    build_presentation_bibliography_entries,
     build_slide_footer_entries,
     compute_presentation_plan,
     format_citation_text,
@@ -312,20 +313,38 @@ def test_compute_presentation_plan_global_per_slide_and_apa() -> None:
 
 
 def test_engine_cite_without_cursor_makes_zero_changes_d10() -> None:
+    """D26 (zastępuje D10): przy braku kursora w tekście dodaje przypis stopkowy in_text=False bez zmiany body_text."""
     zotero = FakeZoteroSource()
     doc = FakeSlideDoc(slide_count=2, active_slide_index=1, has_cursor=False)
     engine = CitationEngine(zotero, doc)
 
-    before_slides = doc.read_slides()
     before_body = doc.get_slide_body_text(1)
 
-    with pytest.raises(NoTextCursorError):
-        engine.cite(["KOWAL2023"])
-
-    assert doc.read_slides() == before_slides
+    slide1 = engine.cite(["KOWAL2023"])
     assert doc.get_slide_body_text(1) == before_body
-    assert doc.load_settings() is None
-    assert doc.backups_created == []
+    assert len(slide1.citations) == 1
+    assert slide1.citations[0].in_text is False
+    assert slide1.citations[0].text == ""
+    assert slide1.citations[0].keys == ("KOWAL2023",)
+    assert [e.prefix for e in slide1.footer_entries] == ["[1] "]
+    assert [e.key for e in slide1.footer_entries] == ["KOWAL2023"]
+    assert engine.last_citation is not None
+    assert engine.last_citation.text == "[1]"
+    assert engine.last_citation.in_text is False
+
+    # Drugie cytowanie bez kursora na tym samym slajdzie scala klucze stopki i uwzględnia w bibliografii
+    on_cite = engine.make_cite_callback()
+    msg = on_cite(("NOWAK2024",), Settings())
+    assert msg == "Wstawiono cytowanie [2] na slajdzie 1."
+    assert doc.get_slide_body_text(1) == before_body
+    slide1_after = doc.read_slides()[0]
+    assert [e.key for e in slide1_after.footer_entries] == ["KOWAL2023", "NOWAK2024"]
+    assert [e.prefix for e in slide1_after.footer_entries] == ["[1] ", "[2] "]
+
+    doc.active_slide_index = 2
+    count, slides_used = engine.insert_bibliography()
+    assert (count, slides_used) == (2, 1)
+    assert [e.key for e in doc.get_slide_bibliography_entries(2)] == ["KOWAL2023", "NOWAK2024"]
 
 
 def test_engine_cite_and_rebuild_without_open_presentation() -> None:
@@ -623,6 +642,7 @@ def test_h1_cite_uses_get_adjacent_citation_at_cursor_and_slides_up_to_active() 
 
 
 def test_m1_cite_checks_has_text_cursor_before_get_active_slide_index_d10() -> None:
+    """D26: gdy has_text_cursor() jest False, a brak aktywnego slajdu, cite() rzuca NoActiveSlideError."""
     class CursorFirstDoc(FakeSlideDoc):
         def has_open_presentation(self) -> bool:
             return True
@@ -637,7 +657,7 @@ def test_m1_cite_checks_has_text_cursor_before_get_active_slide_index_d10() -> N
     doc = CursorFirstDoc(slide_count=2, active_slide_index=None, has_cursor=False)
     engine = CitationEngine(zotero, doc)
 
-    with pytest.raises(NoTextCursorError):
+    with pytest.raises(NoActiveSlideError):
         engine.cite(["KOWAL2023"])
 
 
@@ -722,3 +742,247 @@ def test_c1_rebuild_unsaved_presentation_refuses_without_any_change_d18() -> Non
     # Przebudowa bez kopii na wyraźne żądanie kodu (create_backup=False) nadal możliwa
     engine.rebuild(settings=apa, create_backup=False)
     assert doc.get_slide_body_text(1) != "Tekst slajdu 1 [1]"
+
+
+# ---------------------------------------------------------------------------
+# D2.2: Cytowania stopkowe bez kursora (D26) i bibliografia na slajdzie (D27)
+# ---------------------------------------------------------------------------
+
+
+def test_build_presentation_bibliography_entries_ieee_and_apa_d27() -> None:
+    zotero = FakeZoteroSource()
+    all_keys = ("ZIEL2022", "KOWAL2023", "DOVE2013", "NOWAK2024")
+    ieee_refs = zotero.get_formatted_refs(all_keys, STYLE_IEEE_V4)
+    apa_refs = zotero.get_formatted_refs(all_keys, STYLE_APA)
+
+    assert (
+        build_presentation_bibliography_entries([], ieee_refs, Settings(style_id=STYLE_IEEE_V4))
+        == ()
+    )
+
+    slides = [
+        SlideRecord(
+            slide_index=1,
+            slide_id=101,
+            citations=(
+                Citation(citation_id="c1", keys=("ZIEL2022",), text="[1]", in_text=True),
+                Citation(citation_id="c2", keys=("KOWAL2023",), text="", in_text=False),
+            ),
+        ),
+        SlideRecord(
+            slide_index=2,
+            slide_id=102,
+            citations=(
+                Citation(citation_id="c3", keys=("KOWAL2023", "DOVE2013"), text="[2, 3]", in_text=True),
+                Citation(citation_id="c4", keys=("NOWAK2024",), text="", in_text=False),
+            ),
+            has_bibliography=True,
+        ),
+    ]
+
+    # compute_presentation_plan zachowuje in_text=False (z text="") oraz has_bibliography=True
+    planned = compute_presentation_plan(
+        slides,
+        ieee_refs,
+        Settings(style_id=STYLE_IEEE_V4, numbering_mode="per_slide"),
+    )
+    assert planned[0].citations[0].in_text is True and planned[0].citations[0].text == "[1]"
+    assert planned[0].citations[1].in_text is False and planned[0].citations[1].text == ""
+    assert planned[1].has_bibliography is True
+
+    # IEEE v4: bibliografia zawsze w kolejności globalnej 1..K pierwszego wystąpienia
+    bib_ieee = build_presentation_bibliography_entries(
+        slides,
+        ieee_refs,
+        Settings(style_id=STYLE_IEEE_V4, numbering_mode="per_slide"),
+    )
+    assert [e.key for e in bib_ieee] == ["ZIEL2022", "KOWAL2023", "DOVE2013", "NOWAK2024"]
+    assert [e.prefix for e in bib_ieee] == ["[1] ", "[2] ", "[3] ", "[4] "]
+
+    # APA 7: bibliografia posortowana alfabetycznie bez prefiksu [n]
+    bib_apa = build_presentation_bibliography_entries(
+        slides,
+        apa_refs,
+        Settings(style_id=STYLE_APA),
+    )
+    assert [e.key for e in bib_apa] == ["DOVE2013", "KOWAL2023", "NOWAK2024", "ZIEL2022"]
+    assert all(e.prefix == "" for e in bib_apa)
+
+
+def test_engine_insert_bibliography_columns_split_slides_and_auto_refresh_d27() -> None:
+    zotero = FakeZoteroSource()
+    doc = FakeSlideDoc(slide_count=4, active_slide_index=1, has_cursor=True)
+    engine = CitationEngine(zotero, doc)
+
+    # Brak cytowań w prezentacji -> AzpError bez zmiany slajdów
+    with pytest.raises(AzpError, match="Brak wykorzystanych źródeł"):
+        engine.insert_bibliography()
+
+    # Slajd 1: cytowanie w tekście ZIEL2022 ([1])
+    engine.cite(["ZIEL2022"])
+    # Slajd 2: slajd ze zdjęciami (brak kursora) -> cytowanie stopkowe KOWAL2023 ([2])
+    doc.active_slide_index = 2
+    doc.has_cursor = False
+    engine.cite(["KOWAL2023"])
+    assert doc.get_slide_body_text(2) == "Tekst slajdu 2"
+    assert [e.prefix for e in doc.read_slides()[1].footer_entries] == ["[2] "]
+
+    # Slajd 3: cytowanie w tekście DOVE2013 ([3])
+    doc.active_slide_index = 3
+    doc.has_cursor = True
+    engine.cite(["DOVE2013"])
+
+    # Slajd 4: wstawienie bibliografii w 2 kolumnach
+    doc.active_slide_index = 4
+    s_2col = Settings(
+        style_id=STYLE_IEEE_V4,
+        bib_font_name="Arial",
+        bib_font_size_pt=11,
+        bib_fit_mode="shrink_to_fit",
+        bib_columns=2,
+    )
+    on_bib = engine.make_bibliography_callback()
+    bib_msg = on_bib(s_2col)
+    assert bib_msg == "Wstawiono bibliografię (3 źródeł) na slajdzie."
+    assert doc.read_slides()[3].has_bibliography is True
+    assert [e.key for e in doc.get_slide_bibliography_entries(4)] == [
+        "ZIEL2022",
+        "KOWAL2023",
+        "DOVE2013",
+    ]
+    cols = doc.get_slide_bibliography_columns(4)
+    assert len(cols) == 2
+    assert [len(c) for c in cols] == [2, 1]
+    assert doc.get_slide_bibliography_settings(4) == s_2col
+
+    # Automatyczna aktualizacja bibliografii przy dodaniu nowego cytowania NOWAK2024 na slajdzie 1
+    doc.active_slide_index = 1
+    doc.has_cursor = True
+    engine.cite(["NOWAK2024"], settings=s_2col)
+    assert [e.key for e in doc.get_slide_bibliography_entries(4)] == [
+        "ZIEL2022",
+        "NOWAK2024",
+        "KOWAL2023",
+        "DOVE2013",
+    ]
+    assert [e.prefix for e in doc.get_slide_bibliography_entries(4)] == [
+        "[1] ",
+        "[2] ",
+        "[3] ",
+        "[4] ",
+    ]
+
+    # Automatyczna aktualizacja bibliografii przy zmianie stylu na APA (rebuild)
+    s_apa_3col = replace(s_2col, style_id=STYLE_APA, bib_columns=3)
+    engine.apply_settings(s_apa_3col)
+    assert [e.key for e in doc.get_slide_bibliography_entries(4)] == [
+        "DOVE2013",
+        "KOWAL2023",
+        "NOWAK2024",
+        "ZIEL2022",
+    ]
+    assert all(e.prefix == "" for e in doc.get_slide_bibliography_entries(4))
+    assert len(doc.get_slide_bibliography_columns(4)) == 3
+
+    # Tryb split_slides z dużą czcionką dzielący 4 źródła na kolejne slajdy
+    doc.active_slide_index = 4
+    s_split = replace(
+        s_apa_3col,
+        bib_fit_mode="split_slides",
+        bib_font_size_pt=72,
+        bib_columns=1,
+    )
+    split_msg = on_bib(s_split)
+    assert "4 źródeł" in (split_msg or "")
+    assert "slajdach" in (split_msg or "")
+    assert len(doc.read_slides()) > 4
+
+
+def test_split_slides_bibliography_in_middle_of_presentation_updates_subsequent_slide_indices_d27() -> None:
+    """H2: bibliografia split_slides w środku prezentacji przesuwa indeksy dalszych slajdów podczas cite() i rebuild()."""
+    zotero = FakeZoteroSource()
+    doc = FakeSlideDoc(slide_count=3, active_slide_index=1, has_cursor=True)
+    engine = CitationEngine(zotero, doc)
+
+    s_split = Settings(
+        style_id=STYLE_IEEE_V4,
+        bib_font_size_pt=72,
+        bib_fit_mode="split_slides",
+        bib_columns=1,
+    )
+
+    # Slajd 1: dwa cytowania KOWAL2023 i NOWAK2024
+    engine.cite(["KOWAL2023", "NOWAK2024"], settings=s_split)
+
+    # Slajd 2 (w środku prezentacji!): wstawiamy bibliografię w trybie split_slides (2 źródła -> 2 slajdy: 2 i 3)
+    doc.active_slide_index = 2
+    count, slides_used = engine.insert_bibliography(settings=s_split)
+    assert count == 2
+    assert slides_used == 2
+    # Dawny slajd 3 (slide_id=103) jest teraz na pozycji 4
+    slides_now = doc.read_slides()
+    assert len(slides_now) == 4
+    assert slides_now[3].slide_id == 103
+    assert slides_now[3].slide_index == 4
+
+    # Teraz przechodzimy na ostatni slajd (indeks 4, slide_id=103) i cytujemy DOVE2013 + ZIEL2022:
+    # automatyczne odświeżenie bibliografii na slajdzie 2 zwiększa liczbę slajdów bibliografii z 2 do 4,
+    # a ostatni slajd przesuwa się z indeksu 4 na indeks 6.
+    doc.active_slide_index = 4
+    doc.has_cursor = True
+    active_rec = engine.cite(["DOVE2013", "ZIEL2022"], settings=s_split)
+    assert active_rec.slide_id == 103
+    assert active_rec.slide_index == 6
+    assert doc.active_slide_index == 6
+
+    # Przełączenie na shrink_to_fit (1 slajd bibliografii) podczas rebuild() zwija slajdy kontynuacji
+    s_single = replace(s_split, bib_fit_mode="shrink_to_fit", bib_font_size_pt=12)
+    rebuilt = engine.rebuild(settings=s_single)
+    assert len(rebuilt) == 3
+    assert rebuilt[2].slide_id == 103
+    assert rebuilt[2].slide_index == 3
+    assert doc.active_slide_index == 3
+
+
+def test_footer_citation_then_in_text_citation_on_same_slide_order_consistency_d26() -> None:
+    """M1: gdy na slajdzie jest najpierw przypis stopkowy (in_text=False), a potem cytowanie w tekście (in_text=True),
+    kolejność to (*in_text, *footer_only), a cytowanie w tekście od razu dostaje numer [1] bez nadmiarowego update_slide_citations.
+    """
+    class TrackingSlideDoc(FakeSlideDoc):
+        def __init__(self) -> None:
+            super().__init__(slide_count=1, active_slide_index=1, has_cursor=False)
+            self.inserted_texts: list[str] = []
+            self.update_calls: int = 0
+
+        def insert_citation_at_cursor(self, citation: Citation) -> None:
+            self.inserted_texts.append(citation.text)
+            super().insert_citation_at_cursor(citation)
+
+        def update_slide_citations(self, slide_index: int, citations: object) -> None:
+            self.update_calls += 1
+            super().update_slide_citations(slide_index, citations)  # type: ignore[arg-type]
+
+    zotero = FakeZoteroSource()
+    doc = TrackingSlideDoc()
+    engine = CitationEngine(zotero, doc)
+
+    # Krok 1: cytowanie bez kursora (in_text=False) dla KOWAL2023 -> w stopce [1]
+    s1_foot = engine.cite(["KOWAL2023"])
+    assert len(s1_foot.citations) == 1
+    assert s1_foot.citations[0].in_text is False
+    assert [e.prefix for e in s1_foot.footer_entries] == ["[1] "]
+
+    # Krok 2: użytkownik ustawia kursor w tekście tego samego slajdu i cytuje NOWAK2024 (in_text=True)
+    doc.has_cursor = True
+    doc.update_calls = 0
+    s1_both = engine.cite(["NOWAK2024"])
+
+    # NOWAK2024 (in_text=True) jest przed KOWAL2023 (in_text=False), więc dostaje [1] od razu przy wstawianiu
+    assert [c.in_text for c in s1_both.citations] == [True, False]
+    assert [c.keys for c in s1_both.citations] == [("NOWAK2024",), ("KOWAL2023",)]
+    assert s1_both.citations[0].text == "[1]"
+    assert s1_both.citations[1].text == ""
+    assert doc.inserted_texts == ["[1]"]
+    assert doc.update_calls == 0
+    assert [e.key for e in s1_both.footer_entries] == ["NOWAK2024", "KOWAL2023"]
+    assert [e.prefix for e in s1_both.footer_entries] == ["[1] ", "[2] "]

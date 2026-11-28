@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import math
 from pathlib import Path
 import shutil
 from typing import Any, NamedTuple, Sequence
 
 from azp.contracts import (
+    VALID_BIB_COLUMNS,
     VALID_FOOTER_POSITIONS,
     BackupError,
     Citation,
@@ -28,19 +30,23 @@ PP_SELECTION_SLIDES = 1
 PP_SELECTION_SHAPES = 2
 PP_SELECTION_TEXT = 3
 
+PP_LAYOUT_BLANK = 12
 PP_PLACEHOLDER_FOOTER = 15
 PP_AUTOSIZE_SHAPE_TO_FIT_TEXT = 1
 MSO_TEXT_ORIENTATION_HORIZONTAL = 1
 MSO_TRUE = -1
 MSO_FALSE = 0
 
-# Klucze tagów AZP w prezentacji, slajdach i kształtach (T3)
+# Klucze tagów AZP w prezentacji, slajdach i kształtach (T3, T14)
 TAG_SETTINGS = "AZP_SETTINGS"
 TAG_CITATIONS = "AZP_CITATIONS"
 TAG_ROLE = "AZP_ROLE"
 TAG_ROLE_FOOTER = "FOOTER"
+TAG_ROLE_BIBLIOGRAPHY = "BIBLIOGRAPHY"
 TAG_FOOTER_ENTRIES = "AZP_FOOTER_ENTRIES"
 TAG_HIDDEN_NATIVE_FOOTER = "AZP_HIDDEN_NATIVE_FOOTER"
+TAG_BIB_COLUMN = "AZP_BIB_COLUMN"
+TAG_BIB_CONTINUATION = "AZP_BIB_CONTINUATION"
 
 FOOTER_HEADER_TEXT = "Źródła:"
 FOOTER_MARGIN_X_PT = 36.0
@@ -48,6 +54,11 @@ FOOTER_BOTTOM_OFFSET_ABOVE_PT = 28.0
 FOOTER_BOTTOM_OFFSET_REPLACE_PT = 10.0
 FOOTER_LEFT_WIDTH_RATIO = 0.62
 DEFAULT_FOOTER_HEIGHT_PT = 36.0
+
+BIB_MARGIN_X_PT = 36.0
+BIB_MARGIN_TOP_PT = 36.0
+BIB_MARGIN_BOTTOM_PT = 36.0
+BIB_COLUMN_GAP_PT = 18.0
 
 
 class FooterGeometry(NamedTuple):
@@ -114,6 +125,167 @@ def compute_footer_geometry(
         top = h_slide - h_box - FOOTER_BOTTOM_OFFSET_REPLACE_PT
 
     return FooterGeometry(left=left, top=top, width=width, height=h_box)
+
+
+def split_bibliography_entries_into_columns(
+    entries: Sequence[FooterEntry],
+    columns: int,
+) -> list[list[FooterEntry]]:
+    """Dzieli wpisy bibliografii równomiernie na `1..4` kolumny w kolejności czytania góra->dół (D27)."""
+    if (
+        not isinstance(columns, int)
+        or isinstance(columns, bool)
+        or columns not in VALID_BIB_COLUMNS
+    ):
+        raise ValueError(
+            f"Liczba kolumn bibliografii poza zakresem {VALID_BIB_COLUMNS}: {columns!r}"
+        )
+    if not entries:
+        return []
+    total = len(entries)
+    actual_cols = min(columns, total)
+    base, rem = divmod(total, actual_cols)
+    result: list[list[FooterEntry]] = []
+    idx = 0
+    for c in range(actual_cols):
+        count = base + (1 if c < rem else 0)
+        result.append(list(entries[idx : idx + count]))
+        idx += count
+    return result
+
+
+def compute_bibliography_column_geometries(
+    slide_width: float,
+    slide_height: float,
+    columns: int,
+) -> list[FooterGeometry]:
+    """Wylicza geometrię `(left, top, width, height)` dla `1..columns` kolumn bibliografii na slajdzie (D27)."""
+    if (
+        not isinstance(columns, int)
+        or isinstance(columns, bool)
+        or columns not in VALID_BIB_COLUMNS
+    ):
+        raise ValueError(
+            f"Liczba kolumn bibliografii poza zakresem {VALID_BIB_COLUMNS}: {columns!r}"
+        )
+    w_slide = float(slide_width)
+    h_slide = float(slide_height)
+    usable_width = max(
+        50.0 * columns,
+        w_slide - 2.0 * BIB_MARGIN_X_PT - (columns - 1) * BIB_COLUMN_GAP_PT,
+    )
+    col_width = usable_width / float(columns)
+    col_height = max(50.0, h_slide - BIB_MARGIN_TOP_PT - BIB_MARGIN_BOTTOM_PT)
+    geometries: list[FooterGeometry] = []
+    for col_idx in range(columns):
+        left = BIB_MARGIN_X_PT + col_idx * (col_width + BIB_COLUMN_GAP_PT)
+        geometries.append(
+            FooterGeometry(
+                left=left,
+                top=BIB_MARGIN_TOP_PT,
+                width=col_width,
+                height=col_height,
+            )
+        )
+    return geometries
+
+
+def _estimate_column_height(
+    col_entries: Sequence[FooterEntry],
+    col_width: float,
+    font_size_pt: int,
+) -> float:
+    """Przybliża wysokość (w punktach) kolumny bibliografii po zawinięciu wierszy."""
+    if not col_entries:
+        return 0.0
+    font_pt = max(6, int(font_size_pt))
+    chars_per_line = max(10, int((float(col_width) - 8.0) / max(1.0, 0.55 * font_pt)))
+    total_lines = 0
+    for entry in col_entries:
+        text = entry.plain_text.replace("\r\n", "\r").replace("\n", "\r")
+        for para in text.split("\r"):
+            total_lines += max(1, math.ceil(len(para) / chars_per_line))
+    line_height = font_pt * 1.28
+    return total_lines * line_height + 4.0
+
+
+def estimate_bibliography_font_size(
+    entries: Sequence[FooterEntry],
+    slide_width: float,
+    slide_height: float,
+    target_font_size_pt: int,
+    columns: int,
+) -> int:
+    """Wylicza największy rozmiar czcionki `6..target_font_size_pt`, przy którym wpisy mieszczą się na slajdzie (D27)."""
+    target = max(6, min(72, int(target_font_size_pt)))
+    if not entries:
+        return target
+    geoms = compute_bibliography_column_geometries(slide_width, slide_height, columns)
+    col_width = geoms[0].width
+    max_col_height = geoms[0].height
+    col_chunks = split_bibliography_entries_into_columns(entries, columns)
+
+    for candidate_pt in range(target, 5, -1):
+        if all(
+            _estimate_column_height(col, col_width, candidate_pt) <= max_col_height
+            for col in col_chunks
+        ):
+            return candidate_pt
+    return 6
+
+
+def split_bibliography_entries_across_slides(
+    entries: Sequence[FooterEntry],
+    slide_width: float,
+    slide_height: float,
+    font_size_pt: int,
+    columns: int,
+) -> list[list[FooterEntry]]:
+    """Dzieli wpisy bibliografii na porcje mieszczące się na kolejnych slajdach przy stałej czcionce (D27)."""
+    if not entries:
+        return []
+    font_pt = max(6, min(72, int(font_size_pt)))
+    geoms = compute_bibliography_column_geometries(slide_width, slide_height, columns)
+    col_width = geoms[0].width
+    max_col_height = geoms[0].height
+
+    slides_chunks: list[list[FooterEntry]] = []
+    current_slide: list[FooterEntry] = []
+
+    for entry in entries:
+        if not current_slide:
+            current_slide.append(entry)
+            continue
+        candidate = [*current_slide, entry]
+        col_chunks = split_bibliography_entries_into_columns(candidate, columns)
+        fits = all(
+            len(col) <= 1
+            or _estimate_column_height(col, col_width, font_pt) <= max_col_height
+            for col in col_chunks
+        )
+        if fits:
+            current_slide.append(entry)
+        else:
+            slides_chunks.append(current_slide)
+            current_slide = [entry]
+
+    if current_slide:
+        slides_chunks.append(current_slide)
+    return slides_chunks
+
+
+def _adjust_slide_index_after_bib_change(
+    idx: int,
+    base_slide_index: int,
+    removed_count: int,
+    added_count: int,
+) -> int:
+    """Przelicza 1-based indeks slajdu po usunięciu `removed_count` i dodaniu `added_count` slajdów kontynuacji."""
+    if idx > base_slide_index + removed_count:
+        return idx + (added_count - removed_count)
+    if base_slide_index < idx <= base_slide_index + removed_count:
+        return min(idx, base_slide_index + added_count)
+    return idx
 
 
 def build_footer_text_and_ranges(
@@ -491,6 +663,7 @@ def serialize_citations(citations: Sequence[Citation]) -> str:
             "citation_id": c.citation_id,
             "keys": list(c.keys),
             "text": c.text,
+            "in_text": bool(c.in_text),
         }
         for c in citations
     ]
@@ -519,6 +692,7 @@ def deserialize_citations(raw: str) -> tuple[Citation, ...]:
                         citation_id=str(item["citation_id"]),
                         keys=keys,
                         text=str(item.get("text", "")),
+                        in_text=bool(item.get("in_text", True)),
                     )
                 )
             except (KeyError, ValueError, TypeError):
@@ -736,8 +910,17 @@ class PowerPointSlideDoc:
                 return shape
         return None
 
+    def _find_bibliography_shapes(self, slide: Any) -> list[Any]:
+        shapes: list[Any] = []
+        count = int(slide.Shapes.Count)
+        for i in range(1, count + 1):
+            shape = slide.Shapes(i)
+            if _get_tag(shape, TAG_ROLE) == TAG_ROLE_BIBLIOGRAPHY:
+                shapes.append(shape)
+        return shapes
+
     def _collect_text_shapes_from(self, shape: Any, out: list[Any]) -> None:
-        if _get_tag(shape, TAG_ROLE) == TAG_ROLE_FOOTER:
+        if _get_tag(shape, TAG_ROLE) in (TAG_ROLE_FOOTER, TAG_ROLE_BIBLIOGRAPHY):
             return
         if _shape_has_text_frame(shape):
             out.append(shape)
@@ -853,7 +1036,7 @@ class PowerPointSlideDoc:
                 if 1 <= spec <= int(slide.Shapes.Count):
                     cand = slide.Shapes(spec)
                     if (
-                        _get_tag(cand, TAG_ROLE) != TAG_ROLE_FOOTER
+                        _get_tag(cand, TAG_ROLE) not in (TAG_ROLE_FOOTER, TAG_ROLE_BIBLIOGRAPHY)
                         and _shape_has_text_frame(cand)
                     ):
                         target_shape = cand
@@ -861,7 +1044,7 @@ class PowerPointSlideDoc:
                 try:
                     cand = slide.Shapes(spec)
                     if (
-                        _get_tag(cand, TAG_ROLE) != TAG_ROLE_FOOTER
+                        _get_tag(cand, TAG_ROLE) not in (TAG_ROLE_FOOTER, TAG_ROLE_BIBLIOGRAPHY)
                         and _shape_has_text_frame(cand)
                     ):
                         target_shape = cand
@@ -886,6 +1069,7 @@ class PowerPointSlideDoc:
         # Tryb z oknem PowerPointa: odczyt z ActiveWindow.Selection
         app = self._get_app()
         if app is None:
+            self._last_insert_cursor = None
             return None
         try:
             win = app.ActiveWindow
@@ -893,6 +1077,7 @@ class PowerPointSlideDoc:
                 pane_view = int(win.ActivePane.ViewType)
                 # ppViewNotesPage = 3, ppViewNotesMaster = 5 (panel notatek prelegenta)
                 if pane_view in (3, 5):
+                    self._last_insert_cursor = None
                     return None
             except Exception:
                 pass
@@ -902,7 +1087,7 @@ class PowerPointSlideDoc:
                 shape = self._resolve_selected_shape(sel)
                 if (
                     shape is not None
-                    and _get_tag(shape, TAG_ROLE) != TAG_ROLE_FOOTER
+                    and _get_tag(shape, TAG_ROLE) not in (TAG_ROLE_FOOTER, TAG_ROLE_BIBLIOGRAPHY)
                     and _shape_has_text_frame(shape)
                 ):
                     try:
@@ -919,26 +1104,31 @@ class PowerPointSlideDoc:
                         shape_text = str(shape.TextFrame.TextRange.Text)
                         char_pos = max(0, min(last_char_pos, len(shape_text)))
                         return slide_idx, slide, shape, shape_text, char_pos
+                self._last_insert_cursor = None
                 return None
 
             if sel_type != PP_SELECTION_TEXT:
+                self._last_insert_cursor = None
                 return None
             shape = self._resolve_selected_shape(sel)
             if (
                 shape is None
-                or _get_tag(shape, TAG_ROLE) == TAG_ROLE_FOOTER
+                or _get_tag(shape, TAG_ROLE) in (TAG_ROLE_FOOTER, TAG_ROLE_BIBLIOGRAPHY)
                 or not _shape_has_text_frame(shape)
             ):
+                self._last_insert_cursor = None
                 return None
             try:
                 slide_idx = int(sel.SlideRange(1).SlideIndex)
             except Exception:
                 slide_idx = int(win.View.Slide.SlideIndex)
             if not (1 <= slide_idx <= slide_count):
+                self._last_insert_cursor = None
                 return None
             slide = pres.Slides(slide_idx)
             body_shapes = self._list_body_text_shapes(slide)
             if body_shapes and not any(self._same_shape(sh, shape) for sh in body_shapes):
+                self._last_insert_cursor = None
                 return None
             shape_text = str(shape.TextFrame.TextRange.Text)
             try:
@@ -952,6 +1142,7 @@ class PowerPointSlideDoc:
                 char_pos = len(shape_text)
             return slide_idx, slide, shape, shape_text, char_pos
         except Exception:
+            self._last_insert_cursor = None
             return None
 
     def has_open_presentation(self) -> bool:
@@ -1082,14 +1273,21 @@ class PowerPointSlideDoc:
         if app is not None:
             try:
                 win = app.ActiveWindow
-                try:
-                    idx = int(win.Selection.SlideRange(1).SlideIndex)
-                except Exception:
-                    idx = int(win.View.Slide.SlideIndex)
-                if 1 <= idx <= slide_count:
-                    return idx
             except Exception:
-                pass
+                win = None
+            if win is not None:
+                for getter in (
+                    lambda: int(win.Selection.SlideRange(1).SlideIndex),
+                    lambda: int(win.Selection.SlideRange.SlideIndex),
+                    lambda: int(win.Selection.ShapeRange(1).Parent.SlideIndex),
+                    lambda: int(win.View.Slide.SlideIndex),
+                ):
+                    try:
+                        idx = getter()
+                        if 1 <= idx <= slide_count:
+                            return idx
+                    except Exception:
+                        continue
 
         raise NoActiveSlideError("Brak aktywnego slajdu w PowerPoincie.")
 
@@ -1125,19 +1323,32 @@ class PowerPointSlideDoc:
             pass
         return False
 
+    def _get_slide_footer_only_citations(self, slide: Any) -> list[Citation]:
+        """Odczytuje z tagu slajdu `AZP_CITATIONS` cytowania stopkowe (`in_text=False`, D26)."""
+        return [
+            c
+            for c in deserialize_citations(_get_tag(slide, TAG_CITATIONS))
+            if not c.in_text
+        ]
+
     def _get_citations_by_shape(self, slide: Any) -> list[tuple[Any, list[Citation]]]:
         """Zwraca listę `(shape, citations_list)` dla wszystkich kształtów tekstowych slajdu.
 
         Uwzględnia tag `AZP_CITATIONS` na poszczególnych kształtach, odfiltrowuje cytowania
         usunięte ręcznie z tekstu slajdu, sortuje cytowania według kolejności występowania
-        w tekście oraz obsługuje fallback z tagu slajdu.
+        w tekście oraz obsługuje fallback z tagu slajdu. Cytowania stopkowe (`in_text=False`)
+        należą do poziomu slajdu i nie są przypisywane do kształtów tekstowych (D26, T14).
         """
         body_shapes = self._list_body_text_shapes(slide)
         if not body_shapes:
             return []
 
         raw_by_shape: list[list[Citation]] = [
-            list(deserialize_citations(_get_tag(sh, TAG_CITATIONS)))
+            [
+                c
+                for c in deserialize_citations(_get_tag(sh, TAG_CITATIONS))
+                if c.in_text
+            ]
             for sh in body_shapes
         ]
         had_any_shape_tags = any(bool(cits) for cits in raw_by_shape)
@@ -1169,7 +1380,11 @@ class PowerPointSlideDoc:
             shape_cits[s_idx] = kept
 
         assigned_ids = {c.citation_id for cits in shape_cits for c in cits}
-        slide_cits = deserialize_citations(_get_tag(slide, TAG_CITATIONS))
+        slide_cits = [
+            c
+            for c in deserialize_citations(_get_tag(slide, TAG_CITATIONS))
+            if c.in_text
+        ]
         unassigned: list[Citation] = [
             c for c in (*displaced, *slide_cits) if c.citation_id not in assigned_ids
         ]
@@ -1213,11 +1428,14 @@ class PowerPointSlideDoc:
         slide: Any,
         by_shape: Sequence[tuple[Any, Sequence[Citation]]],
     ) -> list[Citation]:
-        """Zapisuje `AZP_CITATIONS` na kształtach i ich konkatenację (w kolejności kształtów) na slajdzie."""
+        """Zapisuje `AZP_CITATIONS` na kształtach i ich konkatenację (wraz z `in_text=False`) na slajdzie."""
+        footer_only = self._get_slide_footer_only_citations(slide)
         all_citations: list[Citation] = []
         for sh, cits in by_shape:
-            _set_tag(sh, TAG_CITATIONS, serialize_citations(cits))
-            all_citations.extend(cits)
+            in_text_cits = [c for c in cits if c.in_text]
+            _set_tag(sh, TAG_CITATIONS, serialize_citations(in_text_cits))
+            all_citations.extend(in_text_cits)
+        all_citations.extend(footer_only)
         _set_tag(slide, TAG_CITATIONS, serialize_citations(all_citations))
         return all_citations
 
@@ -1273,8 +1491,13 @@ class PowerPointSlideDoc:
             by_shape[target_idx] = (by_shape[target_idx][0], updated_shape_citations)
             self._sync_slide_citations_from_shapes(slide, by_shape)
         else:
+            footer_only = self._get_slide_footer_only_citations(slide)
             _set_tag(shape, TAG_CITATIONS, serialize_citations(updated_shape_citations))
-            _set_tag(slide, TAG_CITATIONS, serialize_citations(updated_shape_citations))
+            _set_tag(
+                slide,
+                TAG_CITATIONS,
+                serialize_citations([*updated_shape_citations, *footer_only]),
+            )
 
         self._last_insert_cursor = (slide_idx, self._shape_key(shape), new_char_pos)
         if self._cursor_target is not None:
@@ -1289,6 +1512,46 @@ class PowerPointSlideDoc:
             except Exception:
                 pass
 
+    def add_footer_citation(self, citation: Citation) -> None:
+        """Dodaje przypis (cytowanie stopkowe `in_text=False`) na aktywnym slajdzie bez kursora (D26)."""
+        if not self.has_open_presentation():
+            raise NoActiveSlideError("Brak otwartej prezentacji w PowerPoincie.")
+
+        self._last_insert_cursor = None
+        slide_idx = self.get_active_slide_index()
+        slide = self._get_slide_com(slide_idx)
+
+        by_shape = self._get_citations_by_shape(slide)
+        for sh, cits in by_shape:
+            _set_tag(
+                sh,
+                TAG_CITATIONS,
+                serialize_citations([c for c in cits if c.in_text]),
+            )
+        in_text_citations = [c for _, cits in by_shape for c in cits if c.in_text]
+        footer_only = self._get_slide_footer_only_citations(slide)
+
+        new_footer_cit = Citation(
+            citation_id=citation.citation_id,
+            keys=tuple(dict.fromkeys(citation.keys)),
+            text="",
+            in_text=False,
+        )
+        if footer_only:
+            existing = footer_only[0]
+            merged_keys = tuple(dict.fromkeys((*existing.keys, *new_footer_cit.keys)))
+            footer_only[0] = Citation(
+                citation_id=existing.citation_id,
+                keys=merged_keys,
+                text="",
+                in_text=False,
+            )
+        else:
+            footer_only.append(new_footer_cit)
+
+        all_citations = [*in_text_citations, *footer_only]
+        _set_tag(slide, TAG_CITATIONS, serialize_citations(all_citations))
+
     def _update_native_footer_placeholder_visibility(
         self,
         slide: Any,
@@ -1298,7 +1561,7 @@ class PowerPointSlideDoc:
         count = int(slide.Shapes.Count)
         for i in range(1, count + 1):
             shape = slide.Shapes(i)
-            if _get_tag(shape, TAG_ROLE) == TAG_ROLE_FOOTER:
+            if _get_tag(shape, TAG_ROLE) in (TAG_ROLE_FOOTER, TAG_ROLE_BIBLIOGRAPHY):
                 continue
             try:
                 if int(shape.PlaceholderFormat.Type) == PP_PLACEHOLDER_FOOTER:
@@ -1403,8 +1666,269 @@ class PowerPointSlideDoc:
         _set_tag(shape, TAG_FOOTER_ENTRIES, serialize_footer_entries(entries))
         self._restore_last_insert_cursor(only_slide_index=slide_index)
 
+    def _remove_bibliography_shapes(self, slide: Any) -> None:
+        """Usuwa wszystkie kształty bibliografii (`TAG_ROLE_BIBLIOGRAPHY`) ze wskazanego slajdu."""
+        for i in range(int(slide.Shapes.Count), 0, -1):
+            sh = slide.Shapes(i)
+            if _get_tag(sh, TAG_ROLE) == TAG_ROLE_BIBLIOGRAPHY:
+                sh.Delete()
+
+    def _remove_bib_continuation_slides_after(
+        self,
+        pres: Any,
+        slide_index: int,
+    ) -> int:
+        """Usuwa slajdy kontynuacji bibliografii (`TAG_BIB_CONTINUATION == '1'`) bezpośrednio po `slide_index`."""
+        removed_count = 0
+        while slide_index + 1 <= int(pres.Slides.Count):
+            next_slide = pres.Slides(slide_index + 1)
+            if _get_tag(next_slide, TAG_BIB_CONTINUATION) == "1":
+                next_slide.Delete()
+                removed_count += 1
+            else:
+                break
+        return removed_count
+
+    def _update_tracked_slide_indices_after_bib_change(
+        self,
+        base_slide_index: int,
+        removed_count: int,
+        added_count: int,
+    ) -> None:
+        if removed_count == 0 and added_count == 0:
+            return
+        if self._active_slide_index is not None:
+            self._active_slide_index = _adjust_slide_index_after_bib_change(
+                self._active_slide_index,
+                base_slide_index=base_slide_index,
+                removed_count=removed_count,
+                added_count=added_count,
+            )
+        if self._cursor_target is not None:
+            self._cursor_target = _CursorTarget(
+                slide_index=_adjust_slide_index_after_bib_change(
+                    self._cursor_target.slide_index,
+                    base_slide_index=base_slide_index,
+                    removed_count=removed_count,
+                    added_count=added_count,
+                ),
+                shape_index_or_name=self._cursor_target.shape_index_or_name,
+                char_pos=self._cursor_target.char_pos,
+            )
+        if self._last_insert_cursor is not None:
+            last_idx, last_shape, last_pos = self._last_insert_cursor
+            self._last_insert_cursor = (
+                _adjust_slide_index_after_bib_change(
+                    last_idx,
+                    base_slide_index=base_slide_index,
+                    removed_count=removed_count,
+                    added_count=added_count,
+                ),
+                last_shape,
+                last_pos,
+            )
+
+    def _insert_blank_continuation_slide(self, pres: Any, target_index: int) -> Any:
+        """Tworzy nowy pusty slajd na pozycji `target_index` (`ppLayoutBlank = 12` z fallbackiem)."""
+        try:
+            return pres.Slides.Add(target_index, PP_LAYOUT_BLANK)
+        except Exception:
+            pass
+        try:
+            custom_layout = pres.Slides(max(1, target_index - 1)).CustomLayout
+            return pres.Slides.AddSlide(target_index, custom_layout)
+        except Exception:
+            pass
+        dup_range = pres.Slides(max(1, target_index - 1)).Duplicate()
+        new_slide = dup_range(1) if callable(dup_range) else dup_range
+        for i in range(int(new_slide.Shapes.Count), 0, -1):
+            try:
+                new_slide.Shapes(i).Delete()
+            except Exception:
+                pass
+        return new_slide
+
+    def _render_bibliography_on_single_slide(
+        self,
+        slide: Any,
+        slide_entries: Sequence[FooterEntry],
+        settings: Settings,
+        font_size_pt: int,
+        slide_width: float,
+        slide_height: float,
+    ) -> None:
+        """Renderuje kolumny bibliografii (bez nagłówka) na pojedynczym slajdzie (D27, T14)."""
+        self._remove_bibliography_shapes(slide)
+        col_entries_list = split_bibliography_entries_into_columns(
+            slide_entries,
+            settings.bib_columns,
+        )
+        geoms = compute_bibliography_column_geometries(
+            slide_width=slide_width,
+            slide_height=slide_height,
+            columns=settings.bib_columns,
+        )
+
+        created_shapes: list[tuple[Any, FooterGeometry]] = []
+        for col_idx, col_entries in enumerate(col_entries_list, start=1):
+            if not col_entries:
+                continue
+            geom = geoms[col_idx - 1]
+            shape = slide.Shapes.AddTextbox(
+                MSO_TEXT_ORIENTATION_HORIZONTAL,
+                geom.left,
+                geom.top,
+                geom.width,
+                geom.height,
+            )
+            _set_tag(shape, TAG_ROLE, TAG_ROLE_BIBLIOGRAPHY)
+            _set_tag(shape, TAG_BIB_COLUMN, str(col_idx))
+            _set_tag(shape, TAG_FOOTER_ENTRIES, serialize_footer_entries(col_entries))
+
+            full_text, ranges = build_footer_text_and_ranges(
+                entries=col_entries,
+                footer_header=False,
+            )
+
+            tf = shape.TextFrame
+            tf.WordWrap = MSO_TRUE
+            tf.MarginLeft = 4.0
+            tf.MarginRight = 4.0
+            tf.MarginTop = 2.0
+            tf.MarginBottom = 2.0
+
+            tr = tf.TextRange
+            tr.Text = full_text
+            tr.Font.Name = settings.bib_font_name
+            tr.Font.Size = font_size_pt
+            tr.Font.Italic = MSO_FALSE
+            tr.Font.Bold = MSO_FALSE
+
+            for char_range in ranges:
+                if char_range.length > 0 and (char_range.italic or char_range.bold):
+                    sub = tr.Characters(char_range.start, char_range.length)
+                    if char_range.italic:
+                        sub.Font.Italic = MSO_TRUE
+                    if char_range.bold:
+                        sub.Font.Bold = MSO_TRUE
+
+            tf.AutoSize = PP_AUTOSIZE_SHAPE_TO_FIT_TEXT
+            tf.WordWrap = MSO_TRUE
+            shape.Left = geom.left
+            shape.Width = geom.width
+            shape.Top = geom.top
+            created_shapes.append((shape, geom))
+
+        if settings.bib_fit_mode == "shrink_to_fit" and created_shapes:
+            max_col_height = geoms[0].height
+            current_size = font_size_pt
+            while current_size > 6 and any(
+                float(getattr(sh, "Height", 0.0)) > max_col_height
+                for sh, _ in created_shapes
+            ):
+                current_size -= 1
+                for sh, geom in created_shapes:
+                    sh.TextFrame.TextRange.Font.Size = current_size
+                    sh.TextFrame.AutoSize = PP_AUTOSIZE_SHAPE_TO_FIT_TEXT
+                    sh.TextFrame.WordWrap = MSO_TRUE
+                    sh.Left = geom.left
+                    sh.Width = geom.width
+                    sh.Top = geom.top
+
+    def set_slide_bibliography(
+        self,
+        slide_index: int,
+        entries: Sequence[FooterEntry],
+        settings: Settings,
+    ) -> int:
+        """Wstawia lub aktualizuje spis wykorzystanych źródeł (bez nagłówka) na slajdzie (D27, T14).
+
+        Zwraca liczbę slajdów zajętych przez bibliografię (1 lub więcej w trybie `split_slides`).
+        """
+        pres = self._get_presentation()
+        if pres is None:
+            raise NoActiveSlideError("Brak otwartej prezentacji w PowerPoincie.")
+        slide = self._get_slide_com(slide_index)
+        while slide_index > 1 and _get_tag(slide, TAG_BIB_CONTINUATION) == "1":
+            slide_index -= 1
+            slide = self._get_slide_com(slide_index)
+        _set_tag(slide, TAG_BIB_CONTINUATION, "")
+
+        removed_count = self._remove_bib_continuation_slides_after(pres, slide_index)
+        self._remove_bibliography_shapes(slide)
+
+        if not entries:
+            self._update_tracked_slide_indices_after_bib_change(
+                base_slide_index=slide_index,
+                removed_count=removed_count,
+                added_count=0,
+            )
+            return 0
+
+        try:
+            slide_width = float(pres.PageSetup.SlideWidth)
+            slide_height = float(pres.PageSetup.SlideHeight)
+        except Exception:
+            slide_width = 960.0
+            slide_height = 540.0
+
+        if settings.bib_fit_mode == "shrink_to_fit":
+            font_size_pt = estimate_bibliography_font_size(
+                entries=entries,
+                slide_width=slide_width,
+                slide_height=slide_height,
+                target_font_size_pt=settings.bib_font_size_pt,
+                columns=settings.bib_columns,
+            )
+            slide_chunks = [list(entries)]
+        elif settings.bib_fit_mode == "split_slides":
+            font_size_pt = settings.bib_font_size_pt
+            slide_chunks = split_bibliography_entries_across_slides(
+                entries=entries,
+                slide_width=slide_width,
+                slide_height=slide_height,
+                font_size_pt=font_size_pt,
+                columns=settings.bib_columns,
+            )
+        else:  # "fixed_font"
+            font_size_pt = settings.bib_font_size_pt
+            slide_chunks = [list(entries)]
+
+        self._render_bibliography_on_single_slide(
+            slide=slide,
+            slide_entries=slide_chunks[0],
+            settings=settings,
+            font_size_pt=font_size_pt,
+            slide_width=slide_width,
+            slide_height=slide_height,
+        )
+
+        for offset, chunk in enumerate(slide_chunks[1:], start=1):
+            cont_slide = self._insert_blank_continuation_slide(
+                pres,
+                slide_index + offset,
+            )
+            _set_tag(cont_slide, TAG_CITATIONS, "")
+            _set_tag(cont_slide, TAG_BIB_CONTINUATION, "1")
+            self._render_bibliography_on_single_slide(
+                slide=cont_slide,
+                slide_entries=chunk,
+                settings=settings,
+                font_size_pt=font_size_pt,
+                slide_width=slide_width,
+                slide_height=slide_height,
+            )
+
+        added_count = max(0, len(slide_chunks) - 1)
+        self._update_tracked_slide_indices_after_bib_change(
+            base_slide_index=slide_index,
+            removed_count=removed_count,
+            added_count=added_count,
+        )
+        return len(slide_chunks)
+
     def read_slides(self) -> list[SlideRecord]:
-        """Odczytuje wszystkie slajdy w kolejności od 1 do N wraz z ich cytowaniami i stopkami."""
+        """Odczytuje wszystkie slajdy w kolejności od 1 do N wraz z ich cytowaniami, stopkami i bibliografią."""
         pres = self._get_presentation()
         if pres is None:
             return []
@@ -1415,7 +1939,9 @@ class PowerPointSlideDoc:
             slide = pres.Slides(idx)
             slide_id = int(slide.SlideID)
             by_shape = self._get_citations_by_shape(slide)
-            citations = tuple(c for _, cits in by_shape for c in cits)
+            in_text_citations = tuple(c for _, cits in by_shape for c in cits if c.in_text)
+            footer_only_citations = tuple(self._get_slide_footer_only_citations(slide))
+            citations = (*in_text_citations, *footer_only_citations)
             footer_shape = self._find_footer_shape(slide)
             if footer_shape is not None:
                 footer_entries = deserialize_footer_entries(
@@ -1424,12 +1950,19 @@ class PowerPointSlideDoc:
             else:
                 footer_entries = ()
 
+            is_bib_continuation = _get_tag(slide, TAG_BIB_CONTINUATION) == "1"
+            has_bibliography = (
+                not is_bib_continuation
+                and len(self._find_bibliography_shapes(slide)) > 0
+            )
+
             records.append(
                 SlideRecord(
                     slide_index=idx,
                     slide_id=slide_id,
                     citations=citations,
                     footer_entries=footer_entries,
+                    has_bibliography=has_bibliography,
                 )
             )
         return records
@@ -1442,7 +1975,7 @@ class PowerPointSlideDoc:
         """Aktualizuje widoczne teksty cytowań (dwuprzebiegowo) oraz tagi na wskazanym slajdzie."""
         slide = self._get_slide_com(slide_index)
         by_shape = self._get_citations_by_shape(slide)
-        new_by_id = {c.citation_id: c for c in citations}
+        new_by_id = {c.citation_id: c for c in citations if c.in_text}
 
         updated_by_shape: list[tuple[Any, list[Citation]]] = []
         for shape, old_shape_cits in by_shape:
@@ -1533,18 +2066,26 @@ class PowerPointSlideDoc:
 
 
 __all__ = [
+    "BIB_COLUMN_GAP_PT",
+    "BIB_MARGIN_BOTTOM_PT",
+    "BIB_MARGIN_TOP_PT",
+    "BIB_MARGIN_X_PT",
     "CharFormatRange",
     "DEFAULT_FOOTER_HEIGHT_PT",
     "FOOTER_HEADER_TEXT",
     "FooterGeometry",
     "PP_AUTOSIZE_SHAPE_TO_FIT_TEXT",
+    "PP_LAYOUT_BLANK",
     "PP_PLACEHOLDER_FOOTER",
     "PP_SELECTION_TEXT",
     "PowerPointSlideDoc",
     "SlideDoc",
+    "TAG_BIB_COLUMN",
+    "TAG_BIB_CONTINUATION",
     "TAG_CITATIONS",
     "TAG_FOOTER_ENTRIES",
     "TAG_ROLE",
+    "TAG_ROLE_BIBLIOGRAPHY",
     "TAG_ROLE_FOOTER",
     "TAG_SETTINGS",
     "TextEdit",
@@ -1552,10 +2093,12 @@ __all__ = [
     "apply_text_edits",
     "build_footer_text_and_ranges",
     "choose_powerpoint_window",
+    "compute_bibliography_column_geometries",
     "compute_footer_geometry",
     "deserialize_citations",
     "deserialize_footer_entries",
     "deserialize_settings",
+    "estimate_bibliography_font_size",
     "find_adjacent_citation_in_text",
     "merge_citation_texts",
     "merge_citations",
@@ -1566,4 +2109,6 @@ __all__ = [
     "serialize_citations",
     "serialize_footer_entries",
     "serialize_settings",
+    "split_bibliography_entries_across_slides",
+    "split_bibliography_entries_into_columns",
 ]

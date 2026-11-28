@@ -14,9 +14,12 @@ from azp.contracts import (
     Citation,
     NoTextCursorError,
     Settings,
+    ZoteroCollection,
     ZoteroItem,
 )
 from azp.gui import (
+    ALL_COLLECTIONS_LABEL,
+    BIB_FIT_LABELS,
     FOOTER_HEADER_LABELS,
     FOOTER_POSITION_LABELS,
     NUMBERING_LABELS,
@@ -35,6 +38,7 @@ def _make_window(
     initial_search: bool = True,
     on_cite=None,
     on_rebuild=None,
+    on_bibliography=None,
 ) -> tuple[AzpWindow, FakeZoteroSource, FakeSlideDoc]:
     zot = zotero if zotero is not None else FakeZoteroSource()
     ppt = doc if doc is not None else FakeSlideDoc()
@@ -45,6 +49,7 @@ def _make_window(
         master=tk_root,
         on_cite=on_cite,
         on_rebuild=on_rebuild,
+        on_bibliography=on_bibliography,
         initial_search=initial_search,
     )
     win.update_idletasks()
@@ -190,14 +195,18 @@ def test_cite_blocked_without_cursor_d10_and_without_selection(tk_root: tk.Tk) -
         assert "Wybierz pozycję" in win.get_status_message()
         assert doc.get_slide_body_text(1) == before_body
 
-        # Wybór pozycji, ale brak kursora w polu tekstowym (D10)
+        # Wybór pozycji bez kursora w polu tekstowym (D26 zastępuje D10):
+        # dodaje przypis do stopki na dole slajdu bez modyfikacji body_text
         win.select_result_keys(["KOWAL2023"])
-        assert win.cite_selected() is False
-        assert "kursor" in win.get_status_message().casefold()
+        assert win.cite_selected() is True
         assert doc.get_slide_body_text(1) == before_body
-        assert doc.read_slides()[0].citations == ()
-        assert doc.read_slides()[0].footer_entries == ()
-        assert doc.load_settings() is None
+        slides = doc.read_slides()
+        assert len(slides[0].citations) == 1
+        assert slides[0].citations[0].keys == ("KOWAL2023",)
+        assert slides[0].citations[0].in_text is False
+        assert len(slides[0].footer_entries) == 1
+        assert slides[0].footer_entries[0].key == "KOWAL2023"
+        assert slides[0].footer_entries[0].prefix == "[1] "
         assert doc.backups_created == []
     finally:
         win.destroy()
@@ -741,3 +750,323 @@ def test_double_click_cites_and_down_arrow_moves_focus_to_results(
         assert len(doc.read_slides()[0].citations) == 1
     finally:
         win.destroy()
+
+
+# ---------------------------------------------------------------------------
+# D25, D26, D27: Kolekcje Zotero, cytowanie bez kursora i slajd bibliografii
+# ---------------------------------------------------------------------------
+
+
+def test_collection_filter_combobox_and_search_within_collection_d25(
+    tk_root: tk.Tk,
+) -> None:
+    win, _zot, _doc = _make_window(tk_root=tk_root)
+    try:
+        values = list(win.collection_combo.cget("values"))
+        assert values == [
+            ALL_COLLECTIONS_LABEL,
+            "Sztuczna inteligencja",
+            "Sztuczna inteligencja / Uczenie maszynowe",
+            "Etyka i prawo",
+        ]
+        assert win.collection_var.get() == ALL_COLLECTIONS_LABEL
+        assert win.get_selected_collection_key() is None
+        assert len(win.get_result_items()) == 4
+
+        # Wybór podkolekcji przez zdarzenie Combobox
+        win.collection_var.set("Sztuczna inteligencja / Uczenie maszynowe")
+        win.collection_combo.event_generate("<<ComboboxSelected>>")
+        win.update_idletasks()
+        assert win.get_selected_collection_key() == "COL_ML"
+        assert [i.key for i in win.get_result_items()] == ["NOWAK2024", "ZIEL2022"]
+
+        # Wyszukiwanie wewnątrz wybranej podkolekcji
+        win.perform_search("Zieliński")
+        assert [i.key for i in win.get_result_items()] == ["ZIEL2022"]
+        win.perform_search("Dove")
+        assert win.get_result_items() == []
+
+        # Przełączenie na kolekcję Etyka i prawo po kluczu (z zachowaniem zapytania "Dove")
+        win.set_collection("COL_ETH")
+        assert win.get_selected_collection_key() == "COL_ETH"
+        assert win.collection_var.get() == "Etyka i prawo"
+        assert [i.key for i in win.get_result_items()] == ["DOVE2013"]
+
+        # Powrót do całej biblioteki
+        win.perform_search("")
+        win.set_collection(ALL_COLLECTIONS_LABEL)
+        assert win.get_selected_collection_key() is None
+        assert len(win.get_result_items()) == 4
+    finally:
+        win.destroy()
+
+
+def test_cite_without_text_cursor_inserts_footer_entry_and_renumbers_d26(
+    tk_root: tk.Tk,
+) -> None:
+    doc = FakeSlideDoc(has_cursor=False)
+    win, _zot, doc = _make_window(tk_root=tk_root, doc=doc)
+    try:
+        # Slajd 1: brak kursora (np. slajd ze zdjęciami) -> cytowanie trafia tylko do stopki
+        doc.active_slide_index = 1
+        body_1_before = doc.get_slide_body_text(1)
+        win.select_result_keys(["KOWAL2023"])
+        assert win.cite_selected() is True
+        assert doc.get_slide_body_text(1) == body_1_before
+
+        win.select_result_keys(["NOWAK2024"])
+        assert win.cite_selected() is True
+        assert doc.get_slide_body_text(1) == body_1_before
+
+        slides = doc.read_slides()
+        assert len(slides[0].citations) == 1
+        assert slides[0].citations[0].in_text is False
+        assert slides[0].citations[0].keys == ("KOWAL2023", "NOWAK2024")
+        assert [e.prefix for e in slides[0].footer_entries] == ["[1] ", "[2] "]
+
+        # Slajd 2: z kursorem -> nowa pozycja dostaje [3], bo [1] i [2] były w stopce slajdu 1
+        doc.active_slide_index = 2
+        doc.has_cursor = True
+        win.select_result_keys(["DOVE2013"])
+        assert win.cite_selected() is True
+        slides = doc.read_slides()
+        assert slides[1].citations[0].in_text is True
+        assert slides[1].citations[0].text == "[3]"
+        assert "[3]" in doc.get_slide_body_text(2)
+    finally:
+        win.destroy()
+
+
+def test_insert_bibliography_button_and_bibliography_settings_d27(
+    tk_root: tk.Tk,
+) -> None:
+    win, _zot, doc = _make_window(tk_root=tk_root)
+    try:
+        # Cytujemy na slajdach 1 i 2 (w tym jedno bez kursora)
+        doc.active_slide_index = 1
+        doc.has_cursor = True
+        win.select_result_keys(["KOWAL2023", "NOWAK2024"])
+        assert win.cite_selected() is True
+
+        doc.active_slide_index = 2
+        doc.has_cursor = False
+        win.select_result_keys(["DOVE2013", "ZIEL2022"])
+        assert win.cite_selected() is True
+
+        # Slajd 3: kliknięcie przycisku "Wstaw bibliografię"
+        doc.active_slide_index = 3
+        win.bibliography_button.invoke()
+        win.update_idletasks()
+
+        bib_entries = doc.get_slide_bibliography_entries(3)
+        assert [e.key for e in bib_entries] == [
+            "KOWAL2023",
+            "NOWAK2024",
+            "DOVE2013",
+            "ZIEL2022",
+        ]
+        assert [e.prefix for e in bib_entries] == ["[1] ", "[2] ", "[3] ", "[4] "]
+        assert doc.read_slides()[2].has_bibliography is True
+
+        # Zmiana liczby kolumn bibliografii na 2 (przebudowuje prezentację z kopią zapasową)
+        win.bib_columns_var.set("2")
+        win.bib_columns_combo.event_generate("<<ComboboxSelected>>")
+        win.update_idletasks()
+        assert win.controller.settings.bib_columns == 2
+        cols = doc.get_slide_bibliography_columns(3)
+        assert len(cols) == 2
+        assert [len(col) for col in cols] == [2, 2]
+
+        # Zmiana czcionki, rozmiaru i trybu dopasowania bibliografii
+        assert win.set_bib_font_name("Arial") is True
+        assert doc.get_slide_bibliography_settings(3).bib_font_name == "Arial"
+
+        assert win.set_bib_font_size(14) is True
+        assert doc.get_slide_bibliography_settings(3).bib_font_size_pt == 14
+
+        win.bib_fit_var.set(BIB_FIT_LABELS["fixed_font"])
+        win.bib_fit_combo.event_generate("<<ComboboxSelected>>")
+        win.update_idletasks()
+        assert win.controller.settings.bib_fit_mode == "fixed_font"
+        assert doc.get_slide_bibliography_settings(3).bib_fit_mode == "fixed_font"
+
+        assert win.set_bib_fit_mode("split_slides") is True
+        assert doc.get_slide_bibliography_settings(3).bib_fit_mode == "split_slides"
+    finally:
+        win.destroy()
+
+
+def test_duplicate_collection_names_are_disambiguated_by_key_h1(
+    tk_root: tk.Tk,
+) -> None:
+    zot = FakeZoteroSource(
+        collections=[
+            ZoteroCollection(key="COL_1", name="Robocze"),
+            ZoteroCollection(key="COL_2", name="Robocze"),
+            ZoteroCollection(key="COL_ALL", name=ALL_COLLECTIONS_LABEL),
+        ],
+        collection_items={
+            "COL_1": {"KOWAL2023"},
+            "COL_2": {"NOWAK2024"},
+            "COL_ALL": {"DOVE2013"},
+        },
+    )
+    win, _zot, _doc = _make_window(tk_root=tk_root, zotero=zot)
+    try:
+        values = list(win.collection_combo.cget("values"))
+        assert values == [
+            ALL_COLLECTIONS_LABEL,
+            "Robocze (COL_1)",
+            "Robocze (COL_2)",
+            f"{ALL_COLLECTIONS_LABEL} (COL_ALL)",
+        ]
+
+        # Wybór pierwszej z kolekcji o nazwie "Robocze"
+        win.collection_var.set("Robocze (COL_1)")
+        win.collection_combo.event_generate("<<ComboboxSelected>>")
+        win.update_idletasks()
+        assert win.get_selected_collection_key() == "COL_1"
+        assert [i.key for i in win.get_result_items()] == ["KOWAL2023"]
+
+        # Wybór drugiej z kolekcji o nazwie "Robocze"
+        win.collection_var.set("Robocze (COL_2)")
+        win.collection_combo.event_generate("<<ComboboxSelected>>")
+        win.update_idletasks()
+        assert win.get_selected_collection_key() == "COL_2"
+        assert [i.key for i in win.get_result_items()] == ["NOWAK2024"]
+
+        # Wybór kolekcji o nazwie kolidującej z ALL_COLLECTIONS_LABEL
+        win.set_collection("COL_ALL")
+        assert win.get_selected_collection_key() == "COL_ALL"
+        assert win.collection_var.get() == f"{ALL_COLLECTIONS_LABEL} (COL_ALL)"
+        assert [i.key for i in win.get_result_items()] == ["DOVE2013"]
+    finally:
+        win.destroy()
+
+
+def test_collections_refresh_automatically_when_zotero_comes_online_m1(
+    tk_root: tk.Tk,
+) -> None:
+    zot = FakeZoteroSource(offline=True)
+    win, zot, _doc = _make_window(tk_root=tk_root, zotero=zot)
+    try:
+        assert list(win.collection_combo.cget("values")) == [ALL_COLLECTIONS_LABEL]
+
+        # Włączenie Zotero w trakcie działania okienka
+        zot.offline = False
+        win.perform_search("")
+        values = list(win.collection_combo.cget("values"))
+        assert "Sztuczna inteligencja" in values
+        assert "Sztuczna inteligencja / Uczenie maszynowe" in values
+        assert "Etyka i prawo" in values
+
+        win.set_collection("Etyka i prawo")
+        assert win.get_selected_collection_key() == "COL_ETH"
+        assert [i.key for i in win.get_result_items()] == ["KOWAL2023", "DOVE2013"]
+    finally:
+        win.destroy()
+
+
+def test_insert_bibliography_errors_empty_offline_and_com_exception_m2(
+    tk_root: tk.Tk,
+) -> None:
+    zot = FakeZoteroSource()
+    doc = FakeSlideDoc()
+    win, zot, doc = _make_window(tk_root=tk_root, zotero=zot, doc=doc)
+    try:
+        # 1. Prezentacja bez żadnych cytowań -> False + czytelny komunikat
+        assert win.insert_bibliography() is False
+        assert "Brak wykorzystanych źródeł" in win.get_status_message()
+
+        # Dodajemy cytowanie, po czym wyłączamy Zotero
+        win.select_result_keys(["KOWAL2023"])
+        assert win.cite_selected() is True
+
+        zot.offline = True
+        assert win.insert_bibliography() is False
+        assert "Zotero nie odpowiada" in win.get_status_message()
+    finally:
+        win.destroy()
+
+    # 3. Wyjątek COM z warstwy slide_doc podczas insert_bibliography
+    class FailingBibDoc(FakeSlideDoc):
+        def set_slide_bibliography(self, slide_index, entries, settings) -> int:  # type: ignore[no-untyped-def]
+            raise RuntimeError("COM failure in set_slide_bibliography")
+
+    fail_doc = FailingBibDoc()
+    win_fail, _zot, fail_doc = _make_window(tk_root=tk_root, doc=fail_doc)
+    try:
+        win_fail.select_result_keys(["KOWAL2023"])
+        assert win_fail.cite_selected() is True
+        assert win_fail.insert_bibliography() is False
+        assert "PowerPoint zgłosił błąd" in win_fail.get_status_message()
+    finally:
+        win_fail.destroy()
+
+
+def test_bibliography_settings_rollback_on_unsaved_d18_and_sync_on_switch_d19_m3(
+    tk_root: tk.Tk,
+) -> None:
+    from azp.contracts import MSG_SAVE_BEFORE_REBUILD
+
+    # 1. D18: Niezapisana prezentacja wycofuje zmiany 4 ustawień bibliografii
+    unsaved_doc = FakeSlideDoc(presentation_path=None)
+    win_unsaved, _zot, _doc = _make_window(tk_root=tk_root, doc=unsaved_doc)
+    try:
+        assert win_unsaved.set_bib_font_name("Arial") is False
+        assert win_unsaved.get_status_message() == MSG_SAVE_BEFORE_REBUILD
+        assert win_unsaved.controller.settings.bib_font_name == "Calibri"
+        assert win_unsaved.bib_font_name_var.get() == "Calibri"
+
+        assert win_unsaved.set_bib_font_size(18) is False
+        assert win_unsaved.controller.settings.bib_font_size_pt == 12
+        assert win_unsaved.bib_font_size_var.get() == "12"
+
+        assert win_unsaved.set_bib_fit_mode("split_slides") is False
+        assert win_unsaved.controller.settings.bib_fit_mode == "shrink_to_fit"
+        assert win_unsaved.bib_fit_var.get() == BIB_FIT_LABELS["shrink_to_fit"]
+
+        assert win_unsaved.set_bib_columns(3) is False
+        assert win_unsaved.controller.settings.bib_columns == 1
+        assert win_unsaved.bib_columns_var.get() == "1"
+    finally:
+        win_unsaved.destroy()
+
+    # 2. D19: Przełączenie aktywnej prezentacji synchronizuje ustawienia bibliografii
+    doc_a = FakeSlideDoc(presentation_path=Path("C:/fake/A.pptx"))
+    doc_a.save_settings(
+        Settings(
+            bib_font_name="Calibri",
+            bib_font_size_pt=12,
+            bib_fit_mode="shrink_to_fit",
+            bib_columns=1,
+        )
+    )
+    doc_b = FakeSlideDoc(presentation_path=Path("C:/fake/B.pptx"))
+    doc_b.save_settings(
+        Settings(
+            bib_font_name="Arial",
+            bib_font_size_pt=16,
+            bib_fit_mode="split_slides",
+            bib_columns=3,
+        )
+    )
+    multi = _MultiPresentationDoc({"A": doc_a, "B": doc_b}, active="A")
+    win_multi = AzpWindow(
+        zotero=FakeZoteroSource(),
+        slide_doc=multi,  # type: ignore[arg-type]
+        master=tk_root,
+        poll_interval_ms=None,
+    )
+    try:
+        assert win_multi.bib_font_name_var.get() == "Calibri"
+        assert win_multi.bib_columns_var.get() == "1"
+
+        multi.activate("B")
+        win_multi.check_active_presentation()
+        assert win_multi.bib_font_name_var.get() == "Arial"
+        assert win_multi.bib_font_size_var.get() == "16"
+        assert win_multi.bib_fit_var.get() == BIB_FIT_LABELS["split_slides"]
+        assert win_multi.bib_columns_var.get() == "3"
+    finally:
+        win_multi.destroy()

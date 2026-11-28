@@ -13,6 +13,7 @@ from azp.contracts import (
     STYLE_IEEE_V4,
     FormattedRef,
     TextSpan,
+    ZoteroCollection,
     ZoteroItem,
     ZoteroOfflineError,
     ZoteroSource,
@@ -631,6 +632,179 @@ def test_get_formatted_ref_falls_back_to_standard_ieee_when_custom_v4_missing() 
 
     batch = client.get_formatted_refs(["K1", "K2"], STYLE_IEEE_V4)
     assert set(batch.keys()) == {"K1", "K2"}
+
+
+def test_list_collections_parses_hierarchy_sorts_and_handles_cycles_d25() -> None:
+    raw_collections = [
+        {
+            "key": "COL_ML",
+            "data": {
+                "key": "COL_ML",
+                "name": "Uczenie maszynowe",
+                "parentCollection": "COL_AI",
+            },
+        },
+        {
+            "key": "COL_AI",
+            "data": {
+                "key": "COL_AI",
+                "name": "Sztuczna inteligencja",
+                "parentCollection": False,
+            },
+        },
+        {
+            "key": "COL_ETH",
+            "data": {
+                "key": "COL_ETH",
+                "name": "Etyka i prawo",
+                "parentCollection": "false",
+            },
+        },
+        {
+            "key": "COL_DEEP",
+            "data": {
+                "key": "COL_DEEP",
+                "name": "Sieci głębokie",
+                "parentCollection": "COL_ML",
+            },
+        },
+        {
+            "key": "CYC_A",
+            "data": {
+                "key": "CYC_A",
+                "name": "Cykl A",
+                "parentCollection": "CYC_B",
+            },
+        },
+        {
+            "key": "CYC_B",
+            "data": {
+                "key": "CYC_B",
+                "name": "Cykl B",
+                "parentCollection": "CYC_A",
+            },
+        },
+    ]
+
+    session = _FakeSession(lambda *_: _FakeResponse(200, raw_collections))
+    client = ZoteroClient(session=session)
+    collections = client.list_collections()
+
+    url, params, _ = session.calls[0]
+    assert url.endswith("/collections")
+    assert params == {"format": "json", "include": "data", "limit": 200}
+
+    by_key = {c.key: c for c in collections}
+    assert by_key["COL_AI"] == ZoteroCollection(
+        key="COL_AI",
+        name="Sztuczna inteligencja",
+        parent_key="",
+    )
+    assert by_key["COL_ETH"] == ZoteroCollection(
+        key="COL_ETH",
+        name="Etyka i prawo",
+        parent_key="",
+    )
+    assert by_key["COL_ML"] == ZoteroCollection(
+        key="COL_ML",
+        name="Sztuczna inteligencja / Uczenie maszynowe",
+        parent_key="COL_AI",
+    )
+    assert by_key["COL_DEEP"] == ZoteroCollection(
+        key="COL_DEEP",
+        name="Sztuczna inteligencja / Uczenie maszynowe / Sieci głębokie",
+        parent_key="COL_ML",
+    )
+    assert "CYC_A" in by_key and "CYC_B" in by_key
+    assert [c.name for c in collections] == sorted(
+        (c.name for c in collections), key=str.casefold
+    )
+
+
+def test_search_items_with_collection_key_uses_collection_endpoint_d25() -> None:
+    raw_items = [
+        {
+            "key": "K1",
+            "data": {
+                "key": "K1",
+                "itemType": "journalArticle",
+                "title": "Deep Learning in Practice",
+                "date": "2024",
+                "creators": [
+                    {"firstName": "Barbara", "lastName": "Nowak", "creatorType": "author"}
+                ],
+            },
+        }
+    ]
+
+    def handler(url: str, params: dict[str, Any] | None, _: float | None) -> _FakeResponse:
+        assert params is not None
+        if params.get("q") == "Nowak Learning":
+            return _FakeResponse(200, [])
+        return _FakeResponse(200, raw_items)
+
+    session = _FakeSession(handler)
+    client = ZoteroClient(session=session)
+
+    # 1. Z podanym collection_key (również w fallbacku wielowyrazowym)
+    results = client.search_items("Nowak Learning", limit=10, collection_key=" COL_ML ")
+    assert [it.key for it in results] == ["K1"]
+    assert len(session.calls) == 2
+    assert all(
+        call[0].endswith("/collections/COL_ML/items/top") for call in session.calls
+    )
+
+    # 2. Gdy collection_key jest None lub pusty -> /items/top
+    session.calls.clear()
+    client.search_items("", limit=5, collection_key="   ")
+    assert len(session.calls) == 1
+    assert session.calls[0][0].endswith("/items/top")
+    assert "/collections/" not in session.calls[0][0]
+
+
+def test_list_collections_resilience_malformed_json_and_self_cycle_m3() -> None:
+    # 1. Payload niebędący listą (np. słownik) -> ZoteroOfflineError
+    bad_payload_client = ZoteroClient(
+        session=_FakeSession(lambda *_: _FakeResponse(200, {"error": "not a list"}))
+    )
+    with pytest.raises(ZoteroOfflineError, match="oczekiwano listy kolekcji"):
+        bad_payload_client.list_collections()
+
+    # 2. Błąd HTTP -> ZoteroOfflineError
+    http_err_client = ZoteroClient(
+        session=_FakeSession(lambda *_: _FakeResponse(502, "Bad Gateway"))
+    )
+    with pytest.raises(ZoteroOfflineError, match="HTTP 502"):
+        http_err_client.list_collections()
+
+    # 3. Elementy niebędące słownikami, rekordy bez key/name, płaskie obiekty i cykl key == parentCollection
+    mixed_payload: list[Any] = [
+        "invalid_entry",
+        123,
+        {"key": "", "data": {"name": "Bez klucza"}},
+        {"key": "NO_NAME", "data": {"name": "   "}},
+        {
+            "key": "SELF_CYC",
+            "data": {
+                "key": "SELF_CYC",
+                "name": "Samorodzic",
+                "parentCollection": "SELF_CYC",
+            },
+        },
+        {
+            "key": "FLAT_COL",
+            "name": "Płaska kolekcja",
+            "parentCollection": None,
+        },
+    ]
+    mixed_client = ZoteroClient(
+        session=_FakeSession(lambda *_: _FakeResponse(200, mixed_payload))
+    )
+    cols = mixed_client.list_collections()
+    assert cols == [
+        ZoteroCollection(key="FLAT_COL", name="Płaska kolekcja", parent_key=""),
+        ZoteroCollection(key="SELF_CYC", name="Samorodzic", parent_key="SELF_CYC"),
+    ]
 
 
 # ---------------------------------------------------------------------------

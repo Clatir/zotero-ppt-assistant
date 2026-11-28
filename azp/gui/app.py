@@ -15,8 +15,10 @@ from azp.contracts import (
     MSG_SAVE_BEFORE_REBUILD,
     STYLE_APA,
     STYLE_IEEE_V4,
+    VALID_BIB_COLUMNS,
     AzpError,
     BackupError,
+    BibFitMode,
     FooterPosition,
     NoActiveSlideError,
     NoTextCursorError,
@@ -24,6 +26,7 @@ from azp.contracts import (
     Settings,
     SlideDoc,
     StyleInfo,
+    ZoteroCollection,
     ZoteroItem,
     ZoteroOfflineError,
     ZoteroSource,
@@ -32,6 +35,7 @@ from azp.engine import CitationEngine
 
 CiteCallback = Callable[[tuple[str, ...], Settings], str | None]
 RebuildCallback = Callable[[Settings], str | None]
+BibliographyCallback = Callable[[Settings], str | None]
 
 NUMBERING_LABELS: dict[NumberingMode, str] = {
     "global": "Globalna (cała prezentacja)",
@@ -58,7 +62,19 @@ LABEL_TO_FOOTER_HEADER: dict[str, bool] = {
     label: enabled for enabled, label in FOOTER_HEADER_LABELS.items()
 }
 
+BIB_FIT_LABELS: dict[BibFitMode, str] = {
+    "shrink_to_fit": "Zmniejsz czcionkę do slajdu (Auto-fit)",
+    "fixed_font": "Stała czcionka (dopasuj ramkę do tekstu)",
+    "split_slides": "Podziel automatycznie na kolejne slajdy",
+}
+LABEL_TO_BIB_FIT: dict[str, BibFitMode] = {
+    label: mode for mode, label in BIB_FIT_LABELS.items()
+}
+
+ALL_COLLECTIONS_LABEL = "Wszystkie pozycje (cała biblioteka)"
+
 DEFAULT_FONT_SIZES: tuple[int, ...] = (8, 9, 10, 11, 12, 14, 16)
+DEFAULT_BIB_FONT_SIZES: tuple[int, ...] = (*DEFAULT_FONT_SIZES, 18, 20, 24)
 
 DARK_THEME_COLORS: dict[str, str] = {
     "bg": "#1e1e2e",
@@ -137,16 +153,19 @@ class AzpController:
         settings: Settings | None = None,
         on_cite: CiteCallback | None = None,
         on_rebuild: RebuildCallback | None = None,
+        on_bibliography: BibliographyCallback | None = None,
         config_path: Path | None = None,
     ) -> None:
         self.zotero = zotero
         self.slide_doc = slide_doc
         self.on_cite = on_cite
         self.on_rebuild = on_rebuild
+        self.on_bibliography = on_bibliography
         self.config_path = config_path
         self._engine = CitationEngine(zotero=zotero, slide_doc=slide_doc)
         self._builtin_on_cite = self._engine.make_cite_callback()
         self._builtin_on_rebuild = self._engine.make_rebuild_callback()
+        self._builtin_on_bibliography = self._engine.make_bibliography_callback()
 
         if settings is not None:
             self.settings = settings
@@ -174,8 +193,10 @@ class AzpController:
 
         self.results: list[ZoteroItem] = []
         self.last_query: str = ""
+        self.selected_collection_key: str | None = None
         self.status_message: str = "Gotowy."
         self._styles: list[StyleInfo] = self._load_styles()
+        self._collections: list[ZoteroCollection] = self._load_collections()
         self._active_presentation_key: str | None = self._current_presentation_key()
 
     def _current_presentation_key(self) -> str | None:
@@ -241,15 +262,58 @@ class AzpController:
         """Zwraca listę stylów cytowania dostępnych w Zotero."""
         return list(self._styles)
 
+    def _load_collections(self) -> list[ZoteroCollection]:
+        list_cols = getattr(self.zotero, "list_collections", None)
+        if not callable(list_cols):
+            return []
+        try:
+            collections = list_cols()
+        except ZoteroOfflineError as exc:
+            self.status_message = _format_zotero_offline_message(exc)
+            return []
+        return list(collections) if collections else []
+
+    def get_collections(self) -> list[ZoteroCollection]:
+        """Zwraca listę kolekcji i podkolekcji w bibliotece Zotero (D25)."""
+        return list(self._collections)
+
+    def refresh_collections(self) -> list[ZoteroCollection]:
+        """Odświeża listę kolekcji z Zotero (D25)."""
+        self._collections = self._load_collections()
+        return list(self._collections)
+
+    def set_collection(self, collection_key: str | None) -> list[ZoteroItem]:
+        """Ustawia aktywny filtr kolekcji Zotero i ponawia wyszukiwanie (D25)."""
+        clean_key = (
+            collection_key.strip()
+            if collection_key and collection_key.strip()
+            else None
+        )
+        self.selected_collection_key = clean_key
+        return self.search(self.last_query)
+
     def search(self, query: str = "", limit: int = 25) -> list[ZoteroItem]:
         """Wyszukuje pozycje w Zotero i aktualizuje listę wyników oraz pasek stanu."""
         self.last_query = query
         try:
-            items = self.zotero.search_items(query=query, limit=limit)
+            if self.selected_collection_key is not None:
+                try:
+                    items = self.zotero.search_items(
+                        query=query,
+                        limit=limit,
+                        collection_key=self.selected_collection_key,
+                    )
+                except TypeError:
+                    items = self.zotero.search_items(query=query, limit=limit)
+            else:
+                items = self.zotero.search_items(query=query, limit=limit)
         except ZoteroOfflineError as exc:
             self.results = []
             self.status_message = _format_zotero_offline_message(exc)
             return []
+
+        if not self._collections:
+            self.refresh_collections()
 
         self.results = list(items)
         if not self.results:
@@ -259,7 +323,7 @@ class AzpController:
         return list(self.results)
 
     def cite_keys(self, keys: Sequence[str]) -> bool:
-        """Wstawia cytowanie dla wybranych kluczy na aktywnym slajdzie."""
+        """Wstawia cytowanie (w miejscu kursora lub w stopce na dole slajdu – D26)."""
         self.sync_with_active_presentation()
         selected_keys = tuple(dict.fromkeys(keys))
         if not selected_keys:
@@ -271,10 +335,10 @@ class AzpController:
                 self.status_message = "Brak otwartej prezentacji w PowerPoincie."
                 return False
 
-            # D10: zanim cokolwiek zmienimy w prezentacji, wymagamy kursora w polu tekstowym
-            if not self.slide_doc.has_text_cursor():
-                self.status_message = "Ustaw kursor w polu tekstowym na slajdzie."
-                return False
+            self.slide_doc.get_active_slide_index()
+        except NoActiveSlideError:
+            self.status_message = "Brak otwartej prezentacji lub aktywnego slajdu."
+            return False
         except AzpError as exc:
             self.status_message = str(exc)
             return False
@@ -304,8 +368,53 @@ class AzpController:
         self.status_message = msg or "Wstawiono cytowanie."
         return True
 
+    def insert_bibliography(self) -> bool:
+        """Wstawia lub aktualizuje spis wykorzystanych źródeł na aktywnym slajdzie (D27)."""
+        self.sync_with_active_presentation()
+        try:
+            if not self.slide_doc.has_open_presentation():
+                self.status_message = "Brak otwartej prezentacji w PowerPoincie."
+                return False
+
+            self.slide_doc.get_active_slide_index()
+        except NoActiveSlideError:
+            self.status_message = "Brak otwartej prezentacji lub aktywnego slajdu."
+            return False
+        except AzpError as exc:
+            self.status_message = str(exc)
+            return False
+        except Exception as exc:
+            self.status_message = f"PowerPoint zgłosił błąd: {_describe_unexpected_error(exc)}"
+            return False
+
+        callback = (
+            self.on_bibliography
+            if self.on_bibliography is not None
+            else self._builtin_on_bibliography
+        )
+        try:
+            msg = callback(self.settings)
+        except ZoteroOfflineError as exc:
+            self.status_message = _format_zotero_offline_message(exc)
+            return False
+        except NoActiveSlideError:
+            self.status_message = "Brak otwartej prezentacji lub aktywnego slajdu."
+            return False
+        except BackupError as exc:
+            self.status_message = str(exc) or MSG_SAVE_BEFORE_REBUILD
+            return False
+        except AzpError as exc:
+            self.status_message = str(exc)
+            return False
+        except Exception as exc:
+            self.status_message = f"PowerPoint zgłosił błąd: {_describe_unexpected_error(exc)}"
+            return False
+
+        self.status_message = msg or "Wstawiono bibliografię."
+        return True
+
     def refresh_presentation(self) -> bool:
-        """Tworzy kopię zapasową i przebudowuje cytowania oraz stopki na wszystkich slajdach."""
+        """Tworzy kopię zapasową i przebudowuje cytowania, stopki oraz bibliografię."""
         self.sync_with_active_presentation()
         try:
             if not self.slide_doc.has_open_presentation():
@@ -398,6 +507,7 @@ class AzpWindow:
         master: tk.Misc | None = None,
         on_cite: CiteCallback | None = None,
         on_rebuild: RebuildCallback | None = None,
+        on_bibliography: BibliographyCallback | None = None,
         initial_search: bool = True,
         poll_interval_ms: int | None = 500,
         config_path: Path | None = None,
@@ -408,6 +518,7 @@ class AzpWindow:
             settings=settings,
             on_cite=on_cite,
             on_rebuild=on_rebuild,
+            on_bibliography=on_bibliography,
             config_path=config_path,
         )
 
@@ -418,11 +529,15 @@ class AzpWindow:
             self.root = tk.Toplevel(master)
 
         self.root.title("Asystent Zotero dla PowerPointa")
-        self.root.geometry("430x640")
-        self.root.minsize(380, 540)
+        self.root.geometry("430x760")
+        self.root.minsize(380, 640)
 
         self._style_title_to_id: dict[str, str] = {}
         self._style_id_to_title: dict[str, str] = {}
+        self._loaded_collections: tuple[ZoteroCollection, ...] = ()
+        self._collection_label_to_key: dict[str, str] = {}
+        self._collection_key_to_label: dict[str, str] = {}
+        self._collection_name_to_key: dict[str, str] = {}
         self._poll_interval_ms: int | None = poll_interval_ms
         self._poll_after_id: str | None = None
         self._ttk_style = ttk.Style(self.root)
@@ -440,6 +555,9 @@ class AzpWindow:
         self._schedule_presentation_poll()
 
     def _build_variables(self) -> None:
+        self.collection_var = tk.StringVar(
+            master=self.root, value=ALL_COLLECTIONS_LABEL
+        )
         self.query_var = tk.StringVar(master=self.root, value="")
         self.style_var = tk.StringVar(master=self.root, value="")
         self.numbering_var = tk.StringVar(master=self.root, value="")
@@ -447,6 +565,10 @@ class AzpWindow:
         self.font_size_var = tk.StringVar(master=self.root, value="")
         self.footer_position_var = tk.StringVar(master=self.root, value="")
         self.footer_header_var = tk.StringVar(master=self.root, value="")
+        self.bib_font_name_var = tk.StringVar(master=self.root, value="")
+        self.bib_font_size_var = tk.StringVar(master=self.root, value="")
+        self.bib_fit_var = tk.StringVar(master=self.root, value="")
+        self.bib_columns_var = tk.StringVar(master=self.root, value="")
         self.always_on_top_var = tk.BooleanVar(
             master=self.root, value=self.controller.settings.always_on_top
         )
@@ -464,18 +586,41 @@ class AzpWindow:
         main.rowconfigure(1, weight=1)
         self._main_frame = main
 
-        # 1. Wyszukiwarka
+        # 1. Wyszukiwarka i wybór kolekcji (D25)
         search_frame = ttk.LabelFrame(
             main, text="Wyszukaj w Zotero", padding=8, style="Azp.TLabelframe"
         )
         search_frame.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        search_frame.columnconfigure(0, weight=1)
+        search_frame.columnconfigure(1, weight=1)
         self._search_frame = search_frame
+
+        collection_values = self._rebuild_collection_mappings()
+
+        collection_lbl = ttk.Label(
+            search_frame, text="Kolekcja:", style="Azp.TLabel"
+        )
+        collection_lbl.grid(row=0, column=0, sticky="w", padx=(0, 6), pady=(0, 6))
+
+        self.collection_combo = ttk.Combobox(
+            search_frame,
+            textvariable=self.collection_var,
+            values=collection_values,
+            state="readonly",
+            style="Azp.TCombobox",
+        )
+        self.collection_combo.grid(
+            row=0, column=1, columnspan=2, sticky="ew", pady=(0, 6)
+        )
+        self.collection_combo.bind(
+            "<<ComboboxSelected>>", self._on_collection_selected
+        )
 
         self.search_entry = ttk.Entry(
             search_frame, textvariable=self.query_var, style="Azp.TEntry"
         )
-        self.search_entry.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self.search_entry.grid(
+            row=1, column=0, columnspan=2, sticky="ew", padx=(0, 6)
+        )
         self.search_entry.bind("<Return>", self._on_search_event)
         self.search_entry.bind("<Control-Return>", self._on_cite_shortcut)
         self.search_entry.bind("<Down>", self._on_search_down_arrow)
@@ -486,7 +631,7 @@ class AzpWindow:
             command=self.perform_search,
             style="Azp.TButton",
         )
-        self.search_button.grid(row=0, column=1)
+        self.search_button.grid(row=1, column=2)
 
         # 2. Lista wyników (D13: wybór pojedynczy i wielokrotny Ctrl/Shift)
         results_frame = ttk.LabelFrame(
@@ -518,7 +663,7 @@ class AzpWindow:
         scrollbar.grid(row=0, column=1, sticky="ns")
         self.results_listbox.configure(yscrollcommand=scrollbar.set)
 
-        # 3. Główne akcje
+        # 3. Główne akcje (D26, D27)
         actions_frame = ttk.Frame(main, style="Azp.TFrame")
         actions_frame.grid(row=2, column=0, sticky="ew", pady=(0, 8))
         actions_frame.columnconfigure(0, weight=1)
@@ -541,7 +686,17 @@ class AzpWindow:
         )
         self.refresh_button.grid(row=0, column=1, sticky="ew", padx=(4, 0))
 
-        # 4. Ustawienia (D2–D5, D9, D14)
+        self.bibliography_button = ttk.Button(
+            actions_frame,
+            text="Wstaw bibliografię",
+            command=self.insert_bibliography,
+            style="Azp.TButton",
+        )
+        self.bibliography_button.grid(
+            row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0)
+        )
+
+        # 4. Ustawienia (D2–D5, D9, D14, D27)
         settings_frame = ttk.LabelFrame(
             main,
             text="Ustawienia cytowań i pola źródeł",
@@ -618,6 +773,46 @@ class AzpWindow:
             variable=self.footer_header_var,
             values=list(FOOTER_HEADER_LABELS.values()),
             handler=self._on_footer_header_selected,
+        )
+
+        bib_fonts = sorted({*fonts, self.controller.settings.bib_font_name})
+        self.bib_font_combo = self._add_setting_row(
+            settings_frame,
+            row=6,
+            label="Czcionka bibliografii:",
+            variable=self.bib_font_name_var,
+            values=bib_fonts,
+            handler=self._on_bib_font_selected,
+        )
+
+        bib_font_sizes = sorted(
+            {*DEFAULT_BIB_FONT_SIZES, self.controller.settings.bib_font_size_pt}
+        )
+        self.bib_font_size_combo = self._add_setting_row(
+            settings_frame,
+            row=7,
+            label="Rozmiar bibliografii (pt):",
+            variable=self.bib_font_size_var,
+            values=[str(size) for size in bib_font_sizes],
+            handler=self._on_bib_font_size_selected,
+        )
+
+        self.bib_fit_combo = self._add_setting_row(
+            settings_frame,
+            row=8,
+            label="Dopasowanie bibliografii:",
+            variable=self.bib_fit_var,
+            values=list(BIB_FIT_LABELS.values()),
+            handler=self._on_bib_fit_selected,
+        )
+
+        self.bib_columns_combo = self._add_setting_row(
+            settings_frame,
+            row=9,
+            label="Kolumny bibliografii:",
+            variable=self.bib_columns_var,
+            values=[str(col) for col in VALID_BIB_COLUMNS],
+            handler=self._on_bib_columns_selected,
         )
 
         # 5. Zawsze na wierzchu + Tryb ciemny
@@ -709,6 +904,22 @@ class AzpWindow:
         self.font_size_var.set(str(s.font_size_pt))
         self.footer_position_var.set(FOOTER_POSITION_LABELS[s.footer_position])
         self.footer_header_var.set(FOOTER_HEADER_LABELS[s.footer_header])
+
+        bib_font_values = list(self.bib_font_combo.cget("values"))
+        if s.bib_font_name not in bib_font_values:
+            self.bib_font_combo.configure(
+                values=sorted({*bib_font_values, s.bib_font_name})
+            )
+        self.bib_font_name_var.set(s.bib_font_name)
+        bib_size_values = [int(v) for v in self.bib_font_size_combo.cget("values")]
+        if s.bib_font_size_pt not in bib_size_values:
+            self.bib_font_size_combo.configure(
+                values=[str(v) for v in sorted({*bib_size_values, s.bib_font_size_pt})]
+            )
+        self.bib_font_size_var.set(str(s.bib_font_size_pt))
+        self.bib_fit_var.set(BIB_FIT_LABELS[s.bib_fit_mode])
+        self.bib_columns_var.set(str(s.bib_columns))
+
         self.always_on_top_var.set(s.always_on_top)
         self.dark_mode_var.set(s.dark_mode)
         if self._applied_dark_mode != s.dark_mode:
@@ -854,6 +1065,9 @@ class AzpWindow:
         except Exception:
             pass
 
+    def _on_collection_selected(self, _event: tk.Event[ttk.Combobox]) -> None:
+        self.set_collection(self.collection_var.get())
+
     def _on_search_event(self, _event: tk.Event[ttk.Entry]) -> None:
         self.perform_search()
 
@@ -902,6 +1116,22 @@ class AzpWindow:
         enabled = LABEL_TO_FOOTER_HEADER[self.footer_header_var.get()]
         self._apply_setting_change(footer_header=enabled)
 
+    def _on_bib_font_selected(self, _event: tk.Event[ttk.Combobox]) -> None:
+        font_name = self.bib_font_name_var.get()
+        self._apply_setting_change(bib_font_name=font_name)
+
+    def _on_bib_font_size_selected(self, _event: tk.Event[ttk.Combobox]) -> None:
+        size_pt = int(self.bib_font_size_var.get())
+        self._apply_setting_change(bib_font_size_pt=size_pt)
+
+    def _on_bib_fit_selected(self, _event: tk.Event[ttk.Combobox]) -> None:
+        mode = LABEL_TO_BIB_FIT[self.bib_fit_var.get()]
+        self._apply_setting_change(bib_fit_mode=mode)
+
+    def _on_bib_columns_selected(self, _event: tk.Event[ttk.Combobox]) -> None:
+        columns = int(self.bib_columns_var.get())
+        self._apply_setting_change(bib_columns=columns)
+
     def _on_always_on_top_toggled(self) -> None:
         enabled = bool(self.always_on_top_var.get())
         self._apply_topmost(enabled)
@@ -928,7 +1158,73 @@ class AzpWindow:
         self.status_var.set(self.controller.status_message)
         return ok
 
+    def _rebuild_collection_mappings(self) -> list[str]:
+        """Buduje unikalne etykiety kolekcji dla Comboboksa oraz słowniki mapowań (D25, H1)."""
+        collections = self.controller.get_collections()
+        self._loaded_collections = tuple(collections)
+        self._collection_label_to_key = {}
+        self._collection_key_to_label = {}
+        self._collection_name_to_key = {}
+
+        name_counts: dict[str, int] = {}
+        for col in collections:
+            name_counts[col.name] = name_counts.get(col.name, 0) + 1
+
+        labels: list[str] = [ALL_COLLECTIONS_LABEL]
+        for col in collections:
+            if name_counts[col.name] > 1 or col.name == ALL_COLLECTIONS_LABEL:
+                label = f"{col.name} ({col.key})"
+            else:
+                label = col.name
+                self._collection_name_to_key[col.name] = col.key
+            self._collection_label_to_key[label] = col.key
+            self._collection_key_to_label[col.key] = label
+            labels.append(label)
+        return labels
+
+    def _refresh_collection_combo_if_changed(self) -> None:
+        current = tuple(self.controller.get_collections())
+        if current != self._loaded_collections:
+            values = self._rebuild_collection_mappings()
+            self.collection_combo.configure(values=values)
+            sel_key = self.controller.selected_collection_key
+            if sel_key and sel_key in self._collection_key_to_label:
+                self.collection_var.set(self._collection_key_to_label[sel_key])
+            elif sel_key is None:
+                self.collection_var.set(ALL_COLLECTIONS_LABEL)
+
     # --- Publiczne API okienka (dla UI, skrótów oraz testów) ---
+
+    def set_collection(self, key_or_name: str | None) -> list[ZoteroItem]:
+        """Ustawia filtr kolekcji Zotero (po kluczu, etykiecie lub nazwie) i odświeża listę wyników (D25)."""
+        cleaned = (key_or_name or "").strip()
+        if not cleaned or cleaned == ALL_COLLECTIONS_LABEL:
+            collection_key: str | None = None
+            self.collection_var.set(ALL_COLLECTIONS_LABEL)
+        elif cleaned in self._collection_label_to_key:
+            collection_key = self._collection_label_to_key[cleaned]
+            self.collection_var.set(cleaned)
+        elif cleaned in self._collection_key_to_label:
+            collection_key = cleaned
+            self.collection_var.set(self._collection_key_to_label[cleaned])
+        elif cleaned in self._collection_name_to_key:
+            collection_key = self._collection_name_to_key[cleaned]
+            self.collection_var.set(self._collection_key_to_label[collection_key])
+        else:
+            collection_key = cleaned
+            self.collection_var.set(cleaned)
+
+        items = self.controller.set_collection(collection_key)
+        self._refresh_collection_combo_if_changed()
+        self.results_listbox.delete(0, tk.END)
+        for item in items:
+            self.results_listbox.insert(tk.END, item.display_label)
+        self.status_var.set(self.controller.status_message)
+        return items
+
+    def get_selected_collection_key(self) -> str | None:
+        """Zwraca klucz aktualnie wybranej kolekcji lub `None` dla całej biblioteki (D25)."""
+        return self.controller.selected_collection_key
 
     def focus_search_entry(self) -> None:
         """Ustawia fokus na polu wyszukiwania i zaznacza cały wpisany tekst (D15)."""
@@ -945,6 +1241,7 @@ class AzpWindow:
         if query is not None:
             self.query_var.set(query)
         items = self.controller.search(self.query_var.get())
+        self._refresh_collection_combo_if_changed()
         self.results_listbox.delete(0, tk.END)
         for item in items:
             self.results_listbox.insert(tk.END, item.display_label)
@@ -988,6 +1285,14 @@ class AzpWindow:
         """Wstawia cytowanie dla zaznaczonych pozycji na liście wyników."""
         self.check_active_presentation()
         ok = self.controller.cite_keys(self.get_selected_keys())
+        self._sync_widgets_from_settings()
+        self.status_var.set(self.controller.status_message)
+        return ok
+
+    def insert_bibliography(self) -> bool:
+        """Wstawia lub aktualizuje spis wykorzystanych źródeł na aktywnym slajdzie (D27)."""
+        self.check_active_presentation()
+        ok = self.controller.insert_bibliography()
         self._sync_widgets_from_settings()
         self.status_var.set(self.controller.status_message)
         return ok
@@ -1047,6 +1352,52 @@ class AzpWindow:
         """Zmienia obecność nagłówka „Źródła:” i natychmiast przebudowuje prezentację (D9, D14)."""
         self.footer_header_var.set(FOOTER_HEADER_LABELS[bool(enabled)])
         return self._apply_setting_change(footer_header=bool(enabled))
+
+    def set_bib_font_name(self, font_name: str) -> bool:
+        """Zmienia czcionkę bibliografii i natychmiast przebudowuje prezentację (D14, D27)."""
+        if not font_name.strip():
+            raise ValueError("Nazwa czcionki bibliografii nie może być pusta.")
+        values = list(self.bib_font_combo.cget("values"))
+        if font_name not in values:
+            self.bib_font_combo.configure(values=sorted({*values, font_name}))
+        self.bib_font_name_var.set(font_name)
+        return self._apply_setting_change(bib_font_name=font_name)
+
+    def set_bib_font_size(self, size_pt: int) -> bool:
+        """Zmienia rozmiar czcionki bibliografii i natychmiast przebudowuje prezentację (D14, D27)."""
+        if size_pt < 6 or size_pt > 72:
+            raise ValueError(
+                f"Rozmiar czcionki bibliografii poza zakresem 6..72 pt: {size_pt}"
+            )
+        values = [int(v) for v in self.bib_font_size_combo.cget("values")]
+        if size_pt not in values:
+            self.bib_font_size_combo.configure(
+                values=[str(s) for s in sorted({*values, size_pt})]
+            )
+        self.bib_font_size_var.set(str(size_pt))
+        return self._apply_setting_change(bib_font_size_pt=size_pt)
+
+    def set_bib_fit_mode(self, mode: BibFitMode) -> bool:
+        """Zmienia tryb dopasowania bibliografii i natychmiast przebudowuje prezentację (D14, D27)."""
+        if mode not in BIB_FIT_LABELS:
+            raise ValueError(
+                f"Nieprawidłowy tryb dopasowania bibliografii: {mode!r}"
+            )
+        self.bib_fit_var.set(BIB_FIT_LABELS[mode])
+        return self._apply_setting_change(bib_fit_mode=mode)
+
+    def set_bib_columns(self, columns: int) -> bool:
+        """Zmienia liczbę kolumn bibliografii i natychmiast przebudowuje prezentację (D14, D27)."""
+        if (
+            not isinstance(columns, int)
+            or isinstance(columns, bool)
+            or columns not in VALID_BIB_COLUMNS
+        ):
+            raise ValueError(
+                f"Liczba kolumn bibliografii poza zakresem {VALID_BIB_COLUMNS}: {columns!r}"
+            )
+        self.bib_columns_var.set(str(columns))
+        return self._apply_setting_change(bib_columns=columns)
 
     def set_always_on_top(self, enabled: bool) -> None:
         """Włącza lub wyłącza tryb „Zawsze na wierzchu”."""

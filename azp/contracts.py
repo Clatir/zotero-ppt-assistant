@@ -15,6 +15,7 @@ STYLE_APA = "http://www.zotero.org/styles/apa"
 
 NumberingMode = Literal["global", "per_slide"]
 FooterPosition = Literal["bottom_full", "bottom_left", "replace_footer"]
+BibFitMode = Literal["shrink_to_fit", "fixed_font", "split_slides"]
 
 VALID_NUMBERING_MODES: tuple[NumberingMode, ...] = ("global", "per_slide")
 VALID_FOOTER_POSITIONS: tuple[FooterPosition, ...] = (
@@ -22,6 +23,12 @@ VALID_FOOTER_POSITIONS: tuple[FooterPosition, ...] = (
     "bottom_left",
     "replace_footer",
 )
+VALID_BIB_FIT_MODES: tuple[BibFitMode, ...] = (
+    "shrink_to_fit",
+    "fixed_font",
+    "split_slides",
+)
+VALID_BIB_COLUMNS: tuple[int, ...] = (1, 2, 3, 4)
 
 
 class AzpError(Exception):
@@ -68,6 +75,15 @@ class StyleInfo:
     style_id: str
     title: str
     is_numeric: bool
+
+
+@dataclass(frozen=True)
+class ZoteroCollection:
+    """Kolekcja (lub podkolekcja) w bibliotece Zotero (D25)."""
+
+    key: str
+    name: str
+    parent_key: str = ""
 
 
 @dataclass(frozen=True)
@@ -126,15 +142,18 @@ class FormattedRef:
 
 @dataclass(frozen=True)
 class Citation:
-    """Wystąpienie cytowania w tekście slajdu.
+    """Wystąpienie cytowania na slajdzie.
 
     Może obejmować jeden lub więcej kluczy Zotero (np. scalone `[1, 2]`
-    albo `(Kowalski, 2023; Nowak, 2024)`).
+    albo `(Kowalski, 2023; Nowak, 2024)`). Gdy `in_text=False`, cytowanie zostało
+    dodane bez kursora tekstowego (lub na slajdzie ze zdjęciami) i widnieje wyłącznie
+    w polu źródeł (stopce) na dole slajdu oraz w bibliografii (D26).
     """
 
     citation_id: str
     keys: tuple[str, ...]
     text: str = ""
+    in_text: bool = True
 
     def __post_init__(self) -> None:
         if not self.keys:
@@ -143,7 +162,7 @@ class Citation:
 
 @dataclass(frozen=True)
 class FooterEntry:
-    """Pojedynczy wpis w polu źródeł (stopce) pod slajdem."""
+    """Pojedynczy wpis w polu źródeł (stopce) pod slajdem lub w bibliografii."""
 
     key: str
     spans: tuple[TextSpan, ...]
@@ -163,17 +182,18 @@ class FooterEntry:
 
 @dataclass(frozen=True)
 class SlideRecord:
-    """Stan cytowań i stopki na pojedynczym slajdzie prezentacji."""
+    """Stan cytowań, stopki i bibliografii na pojedynczym slajdzie prezentacji."""
 
     slide_index: int
     slide_id: int
     citations: tuple[Citation, ...] = ()
     footer_entries: tuple[FooterEntry, ...] = ()
+    has_bibliography: bool = False
 
 
 @dataclass(frozen=True)
 class Settings:
-    """Ustawienia prezentacji i okienka (D2–D5, D9)."""
+    """Ustawienia prezentacji i okienka (D2–D5, D9, D21, D27)."""
 
     style_id: str = STYLE_IEEE_V4
     numbering_mode: NumberingMode = "global"
@@ -183,6 +203,10 @@ class Settings:
     footer_header: bool = True
     always_on_top: bool = True
     dark_mode: bool = False
+    bib_font_name: str = "Calibri"
+    bib_font_size_pt: int = 12
+    bib_fit_mode: BibFitMode = "shrink_to_fit"
+    bib_columns: int = 1
 
     def __post_init__(self) -> None:
         if self.numbering_mode not in VALID_NUMBERING_MODES:
@@ -206,6 +230,29 @@ class Settings:
             raise ValueError(f"Nieprawidłowa wartość always_on_top: {self.always_on_top!r}")
         if not isinstance(self.dark_mode, bool):
             raise ValueError(f"Nieprawidłowa wartość dark_mode: {self.dark_mode!r}")
+        if not isinstance(self.bib_font_name, str) or not self.bib_font_name.strip():
+            raise ValueError("Nazwa czcionki bibliografii nie może być pusta.")
+        if (
+            not isinstance(self.bib_font_size_pt, int)
+            or isinstance(self.bib_font_size_pt, bool)
+            or self.bib_font_size_pt < 6
+            or self.bib_font_size_pt > 72
+        ):
+            raise ValueError(
+                f"Rozmiar czcionki bibliografii poza zakresem 6..72 pt: {self.bib_font_size_pt!r}"
+            )
+        if self.bib_fit_mode not in VALID_BIB_FIT_MODES:
+            raise ValueError(
+                f"Nieprawidłowy tryb dopasowania bibliografii: {self.bib_fit_mode!r}"
+            )
+        if (
+            not isinstance(self.bib_columns, int)
+            or isinstance(self.bib_columns, bool)
+            or self.bib_columns not in VALID_BIB_COLUMNS
+        ):
+            raise ValueError(
+                f"Liczba kolumn bibliografii poza zakresem {VALID_BIB_COLUMNS}: {self.bib_columns!r}"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         """Serializuje ustawienia do słownika (do zapisu w Tags lub config.json)."""
@@ -218,6 +265,10 @@ class Settings:
             "footer_header": self.footer_header,
             "always_on_top": self.always_on_top,
             "dark_mode": self.dark_mode,
+            "bib_font_name": self.bib_font_name,
+            "bib_font_size_pt": self.bib_font_size_pt,
+            "bib_fit_mode": self.bib_fit_mode,
+            "bib_columns": self.bib_columns,
         }
 
     @classmethod
@@ -233,6 +284,10 @@ class Settings:
             footer_header=data.get("footer_header", defaults.footer_header),
             always_on_top=data.get("always_on_top", defaults.always_on_top),
             dark_mode=data.get("dark_mode", defaults.dark_mode),
+            bib_font_name=data.get("bib_font_name", defaults.bib_font_name),
+            bib_font_size_pt=data.get("bib_font_size_pt", defaults.bib_font_size_pt),
+            bib_fit_mode=data.get("bib_fit_mode", defaults.bib_fit_mode),
+            bib_columns=data.get("bib_columns", defaults.bib_columns),
         )
 
 
@@ -243,11 +298,19 @@ class ZoteroSource(Protocol):
     def is_available(self) -> bool:
         """Zwraca `True`, jeśli lokalne API Zotero odpowiada."""
 
-    def search_items(self, query: str = "", limit: int = 25) -> list[ZoteroItem]:
-        """Wyszukuje pozycje w bibliotece po autorze, tytule lub roku.
+    def search_items(
+        self,
+        query: str = "",
+        limit: int = 25,
+        collection_key: str | None = None,
+    ) -> list[ZoteroItem]:
+        """Wyszukuje pozycje w bibliotece (lub we wskazanej kolekcji) po autorze, tytule lub roku.
 
         Rzuca `ZoteroOfflineError`, gdy Zotero nie odpowiada.
         """
+
+    def list_collections(self) -> list[ZoteroCollection]:
+        """Zwraca listę kolekcji i podkolekcji w bibliotece Zotero (D25)."""
 
     def get_formatted_ref(self, key: str, style_id: str) -> FormattedRef:
         """Zwraca sformatowane cytowanie i opis bibliograficzny dla klucza i stylu.
@@ -275,7 +338,7 @@ class SlideDoc(Protocol):
         """Zwraca ścieżkę do pliku `.pptx` lub `None`, jeśli plik nie był zapisany."""
 
     def has_text_cursor(self) -> bool:
-        """Zwraca `True`, jeśli kursor stoi w polu tekstowym na aktywnym slajdzie (D10)."""
+        """Zwraca `True`, jeśli kursor stoi w polu tekstowym na aktywnym slajdzie."""
 
     def get_active_slide_index(self) -> int:
         """Zwraca 1-based indeks aktywnego slajdu lub rzuca `NoActiveSlideError`."""
@@ -283,9 +346,11 @@ class SlideDoc(Protocol):
     def insert_citation_at_cursor(self, citation: Citation) -> None:
         """Wstawia cytowanie w miejscu kursora na aktywnym slajdzie i zapisuje tagi.
 
-        Gdy kursor nie stoi w polu tekstowym, rzuca `NoTextCursorError` i nie wprowadza
-        żadnych zmian w prezentacji (D10).
+        Gdy kursor nie stoi w polu tekstowym, rzuca `NoTextCursorError`.
         """
+
+    def add_footer_citation(self, citation: Citation) -> None:
+        """Dodaje przypis (cytowanie stopkowe `in_text=False`) na aktywnym slajdzie bez kursora (D26)."""
 
     def set_slide_footer(
         self,
@@ -294,6 +359,17 @@ class SlideDoc(Protocol):
         settings: Settings,
     ) -> None:
         """Tworzy, aktualizuje lub usuwa (gdy `entries` puste) pole źródeł na slajdzie."""
+
+    def set_slide_bibliography(
+        self,
+        slide_index: int,
+        entries: Sequence[FooterEntry],
+        settings: Settings,
+    ) -> int:
+        """Wstawia lub aktualizuje spis wykorzystanych źródeł (bez nagłówka) na slajdzie (D27).
+
+        Zwraca liczbę slajdów zajętych przez bibliografię (1 lub więcej w trybie `split_slides`).
+        """
 
     def read_slides(self) -> list[SlideRecord]:
         """Odczytuje wszystkie slajdy w kolejności od 1 do N wraz z ich cytowaniami i stopkami."""

@@ -44,23 +44,28 @@ Nie przechodzi, gdy.
   - *Jak sprawdzić:* uruchom `python -m pytest -q`.
   - *Oczekiwany efekt:* przechodzą wszystkie 155 testów jednostkowych (`155 passed`); sprawdzane są: automatyczne oczyszczanie usuniętych ręcznie („martwych”) cytowań z tagów i stopki, wykrywanie kursora w grupach kształtów i tabelach oraz blokada w panelu notatek prelegenta, fallback stylu `STYLE_IEEE_V4` → standardowy IEEE przy HTTP 400, wyszukiwanie wielowyrazowe po tokenach, przełącznik *Tryb ciemny* (D21), budowanie i instalacja dodatku wstążki `AsystentZotero.ppam` (D22), aktualizacja jednym kliknięciem `instaluj_lub_aktualizuj.bat` (D23) oraz automatyczna aktualizacja w tle po otwarciu okienka z przeładowaniem po pobraniu nowej wersji i zachowaniem `config.json` (D24, T13).
   - *Nie przechodzi, gdy:* którykolwiek ze 155 testów zgłasza błąd.
+- **D1–D2 Kolekcje Zotero (D25), Cytowanie bez kursora / na slajdach ze zdjęciami (D26) oraz Przycisk „Wstaw bibliografię” bez nagłówka z wyborem czcionki, rozmiaru, dopasowania i kolumn (D27, T14)** – **Automatycznie:** `tests/test_contracts.py` (12 testów), `tests/test_zotero.py` (31 testów), `tests/test_ppt.py` (34 testy jednostkowe + 1 test COM), `tests/test_engine.py` (25 testów), `tests/test_gui.py` (28 testów)
+  - *Jak sprawdzić:* uruchom `python -m pytest -q` oraz (przy zamkniętym PowerPoincie) `python -m pytest -q -m com`.
+  - *Oczekiwany efekt:* przechodzą wszystkie testy bez COM (`176 passed`) oraz testy COM (`3 passed`); sprawdzane są: pobieranie hierarchii kolekcji Zotero i filtrowanie wyników po wybranej kolekcji (D25), wstawianie przypisu bezpośrednio do stopki na dole aktywnego slajdu, gdy nie ustawiono kursora w tekście lub na slajdzie są same zdjęcia (D26), oraz przycisk *Wstaw bibliografię* wstawiający na aktywnym slajdzie spis wszystkich wykorzystanych źródeł bez żadnego nagłówka z wybraną czcionką, rozmiarem, liczbą kolumn (`1..4`) i trybem dopasowania (*Zmniejsz czcionkę do slajdu*, *Stała czcionka*, *Podziel na kolejne slajdy* – D27).
+  - *Nie przechodzi, gdy:* którykolwiek ze 176 testów jednostkowych lub 3 testów COM zgłasza błąd.
 - **C3.1 Odbiór ręczny na Twojej prezentacji w PowerPoincie** – **Tylko Ty:** uruchomienie okienka z przycisku **Asystent Zotero** na wstążce PowerPointa (karta **Dodatki** lub **Narzędzia główne**) albo dwuklikiem w `start_azp.bat` obok otwartego PowerPointa i Zotero 10
   - *Jak sprawdzić:*
     1. Uruchom Zotero 10 i otwórz (lub zrestartuj, jeśli był otwarty przed instalacją dodatku) PowerPointa ze swoją prezentacją `.pptx`.
     2. Na wstążce PowerPointa przejdź na kartę **Dodatki** (lub na koniec karty **Narzędzia główne**) i kliknij przycisk **Asystent Zotero** (D22).
-    3. W okienku AZP zaznacz przełącznik **Tryb ciemny** (D21) i sprawdź zmianę wyglądu okienka.
-    4. Kliknij na slajd poza jakimkolwiek polem tekstowym i naciśnij *Cytuj* (D10).
+    3. W okienku AZP zaznacz przełącznik **Tryb ciemny** (D21) i wybierz kolekcję na liście **Kolekcja:** w sekcji wyszukiwania (D25).
+    4. Przejdź na slajd ze zdjęciem (lub kliknij slajd bez zaznaczania tekstu), wybierz pozycję na liście wyników i kliknij *Cytuj* (D26).
     5. Postaw kursor w polu tekstowym (obok pogrubionego lub pokolorowanego słowa), wyszukaj pozycję (`Ctrl+F`), naciśnij strzałkę w dół i `Enter` (albo kliknij dwukrotnie pozycję na liście wyników lub przycisk *Cytuj*) (D15, D20, T10).
     6. Nie ruszając kursora, zaznacz drugą pozycję (albo wybierz kilka pozycji z `Ctrl`/`Shift`) i kliknij *Cytuj* (D13).
-    7. Zmień na liście w okienku styl na APA 7 i z powrotem na IEEE v4, tryb numeracji (*Globalna* / *Od [1] na każdym slajdzie*), czcionkę, rozmiar, położenie pola źródeł (3 warianty) oraz nagłówek „Źródła:” (D2–D5, D9, D14, D17).
+    7. Przejdź na slajd przeznaczony na bibliografię, wybierz czcionkę, rozmiar, dopasowanie (*Zmniejsz czcionkę do slajdu*, *Stała czcionka* lub *Podziel automatycznie na kolejne slajdy*) oraz liczbę kolumn (`1..4`) i kliknij **Wstaw bibliografię** (D27).
+    8. Zmień na liście w okienku styl na APA 7 i z powrotem na IEEE v4, tryb numeracji (*Globalna* / *Od [1] na każdym slajdzie*), czcionkę, rozmiar, położenie pola źródeł (3 warianty) oraz nagłówek „Źródła:” (D2–D5, D9, D14, D17).
   - *Oczekiwany efekt:*
     - Przycisk **Asystent Zotero** na wstążce PowerPointa otwiera okienko AZP bez czarnej konsoli w tle (a kolejne kliknięcie przywraca otwarte okienko na wierzch bez duplikowania okien – D22, T12).
-    - Przełącznik **Tryb ciemny** natychmiast zmienia motyw okienka na ciemny i zapamiętuje wybór w `config.json` (D21).
-    - Bez kursora w tekście prezentacja nie zmienia się, a pasek stanu prosi o ustawienie kursora (D10).
-    - Po *Cytuj* w tekście pojawia się cytowanie, pod slajdem pole źródeł z zachowaną kursywą (T4), formatowanie sąsiednich słów na slajdzie nie ginie (T10), a fokus wraca do PowerPointa za wstawionym cytowaniem (D20).
-    - Kolejne cytowanie przy kursorze scala się automatycznie w `[1, 2]` / `(Autor1; Autor2)` (D13), a ręczne usunięcie cytowania klawiszem `Backspace` na slajdzie i kliknięcie *Odśwież / Przenumeruj* usuwa pozycję ze stopki i przenumerowuje slajd (T11).
-    - Każda zmiana na liście (na zapisanej prezentacji) od razu przebudowuje prezentację i tworzy obok pliku kopię `<nazwa>.bak.pptx` bez nadpisywania samego pliku na dysku (D14, D17).
-  - *Nie przechodzi, gdy:* przycisk na wstążce nie otwiera okienka, okienko nie widzi kursora mimo edycji tekstu, psuje formatowanie tekstu na slajdzie, brak kursywy w stopce albo nie powstaje kopia `.bak.pptx`.
+    - Lista **Kolekcja:** pokazuje kolekcje i podkolekcje z Twojego Zotero i po wybraniu filtruje wyniki wyszukiwania do wskazanej kolekcji (D25).
+    - Kliknięcie *Cytuj* bez kursora w tekście (lub na slajdzie ze samymi zdjęciami) wstawia przypis od razu do stopki na dole slajdu z właściwym numerem `[n]` bez wstawiania znacznika na środku slajdu (D26).
+    - Po *Cytuj* z kursorem w tekście pojawia się cytowanie, pod slajdem pole źródeł z zachowaną kursywą (T4), formatowanie sąsiednich słów na slajdzie nie ginie (T10), a fokus wraca do PowerPointa za wstawionym cytowaniem (D20).
+    - Przycisk **Wstaw bibliografię** wstawia na aktywnym slajdzie pełny spis wszystkich wykorzystanych źródeł **bez żadnego nagłówka**, podzielony na wybraną liczbę kolumn (`1..4`) i dopasowany wg wybranego trybu (D27).
+    - Każda zmiana ustawień (na zapisanej prezentacji) od razu przebudowuje cytowania, stopki oraz bibliografię i tworzy obok pliku kopię `<nazwa>.bak.pptx` bez nadpisywania samego pliku na dysku (D14, D17).
+  - *Nie przechodzi, gdy:* przycisk na wstążce nie otwiera okienka, filtrowanie kolekcji nie działa, cytowanie bez kursora nie dodaje stopki, bibliografia ma nagłówek albo nie powstaje kopia `.bak.pptx`.
 
 ## Wszystkie punkty
 - A1.1 Odpowiedź lokalnego API Zotero dla stylów IEEE v4 i APA
@@ -73,4 +78,5 @@ Nie przechodzi, gdy.
 - C1.1 Integracja okienka z prawdziwym PowerPointem i Zotero (`azp.main`, `python -m azp`)
 - C2.1 Dodatki: `config.json`, skróty klawiszowe w okienku (D15) i uruchamianie ikoną `start_azp.bat` / `start_azp.pyw` (D16)
 - C2.2 Poprawki audytu (T11), Tryb ciemny (D21) oraz Dodatek na wstążce PowerPointa (`AsystentZotero.ppam` – D22, T12)
+- D1–D2 Kolekcje Zotero (D25), Cytowanie bez kursora / na slajdach ze zdjęciami (D26) oraz Przycisk „Wstaw bibliografię” (D27, T14)
 - C3.1 Odbiór ręczny na Twojej prezentacji w PowerPoincie

@@ -13,6 +13,7 @@ from azp.contracts import (
     STYLE_IEEE_V4,
     FormattedRef,
     StyleInfo,
+    ZoteroCollection,
     ZoteroItem,
     ZoteroOfflineError,
     spans_to_plain_text,
@@ -231,10 +232,84 @@ class ZoteroClient:
         except requests.RequestException:
             return False
 
-    def search_items(self, query: str = "", limit: int = 25) -> list[ZoteroItem]:
-        """Wyszukuje pozycje w bibliotece po autorze, tytule lub roku."""
+    def list_collections(self) -> list[ZoteroCollection]:
+        """Zwraca listę kolekcji i podkolekcji w bibliotece Zotero (D25)."""
+        payload = self._request_json(
+            "/collections",
+            params={
+                "format": "json",
+                "include": "data",
+                "limit": 200,
+            },
+        )
+        if not isinstance(payload, list):
+            raise ZoteroOfflineError(
+                f"{OFFLINE_MESSAGE} (oczekiwano listy kolekcji)."
+            )
+
+        raw_map: dict[str, tuple[str, str]] = {}
+        for raw_col in payload:
+            if not isinstance(raw_col, dict):
+                continue
+            data = raw_col.get("data")
+            if not isinstance(data, dict):
+                data = raw_col
+            key = str(raw_col.get("key") or data.get("key") or "").strip()
+            name = str(data.get("name") or "").strip()
+            if not key or not name:
+                continue
+            raw_parent = data.get("parentCollection")
+            if isinstance(raw_parent, str):
+                cleaned_parent = raw_parent.strip()
+                parent_key = (
+                    "" if cleaned_parent.lower() == "false" else cleaned_parent
+                )
+            else:
+                parent_key = ""
+            raw_map[key] = (name, parent_key)
+
+        collections: list[ZoteroCollection] = []
+        for key, (name, parent_key) in raw_map.items():
+            parts = [name]
+            visited = {key}
+            curr_parent = parent_key
+            while (
+                curr_parent
+                and curr_parent in raw_map
+                and curr_parent not in visited
+            ):
+                visited.add(curr_parent)
+                parent_name, next_parent = raw_map[curr_parent]
+                parts.append(parent_name)
+                curr_parent = next_parent
+            full_name = " / ".join(reversed(parts))
+            collections.append(
+                ZoteroCollection(
+                    key=key,
+                    name=full_name,
+                    parent_key=parent_key,
+                )
+            )
+
+        collections.sort(key=lambda c: (c.name.casefold(), c.key))
+        return collections
+
+    def search_items(
+        self,
+        query: str = "",
+        limit: int = 25,
+        collection_key: str | None = None,
+    ) -> list[ZoteroItem]:
+        """Wyszukuje pozycje w bibliotece (lub we wskazanej kolekcji) po autorze, tytule lub roku."""
         if limit <= 0:
             return []
+
+        clean_collection_key = (collection_key or "").strip()
+        items_path = (
+            f"/collections/{clean_collection_key}/items/top"
+            if clean_collection_key
+            else "/items/top"
+        )
 
         clean_query = query.strip()
         fetch_limit = max(limit, 50) if clean_query else limit
@@ -247,7 +322,7 @@ class ZoteroClient:
             params["q"] = clean_query
             params["qmode"] = "titleCreatorYear"
 
-        payload = self._request_json("/items/top", params=params)
+        payload = self._request_json(items_path, params=params)
         if not isinstance(payload, list):
             raise ZoteroOfflineError(
                 f"{OFFLINE_MESSAGE} (oczekiwano listy pozycji)."
@@ -268,7 +343,7 @@ class ZoteroClient:
 
         if not clean_query and len(items) < limit and len(payload) >= fetch_limit:
             extra_payload = self._request_json(
-                "/items/top",
+                items_path,
                 params={
                     "format": "json",
                     "include": "data",
@@ -292,7 +367,7 @@ class ZoteroClient:
             non_year = [t for t in tokens if not t.isdigit()]
             primary_token = max(non_year or tokens, key=len)
             fallback_payload = self._request_json(
-                "/items/top",
+                items_path,
                 params={
                     "format": "json",
                     "include": "data",

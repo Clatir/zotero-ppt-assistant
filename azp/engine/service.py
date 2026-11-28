@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Mapping, Sequence
 import uuid
 
 from azp.contracts import (
@@ -11,8 +11,8 @@ from azp.contracts import (
     AzpError,
     BackupError,
     Citation,
+    FormattedRef,
     NoActiveSlideError,
-    NoTextCursorError,
     Settings,
     SlideDoc,
     SlideRecord,
@@ -22,6 +22,7 @@ from azp.contracts import (
 from azp.engine.numbering import (
     assign_global_numbers,
     assign_slide_numbers,
+    build_presentation_bibliography_entries,
     compute_presentation_plan,
     format_citation_text,
     is_numeric_style,
@@ -54,16 +55,39 @@ class CitationEngine:
     def _new_citation_id() -> str:
         return f"cit-{uuid.uuid4().hex[:12]}"
 
+    def _refresh_existing_bibliographies(
+        self,
+        planned_slides: Sequence[SlideRecord],
+        refs: Mapping[str, FormattedRef],
+        settings: Settings,
+        styles: Sequence[StyleInfo],
+    ) -> bool:
+        bib_slides = [s for s in planned_slides if s.has_bibliography]
+        if not bib_slides:
+            return False
+        set_bib = getattr(self.slide_doc, "set_slide_bibliography", None)
+        if not callable(set_bib):
+            return False
+        bib_entries = build_presentation_bibliography_entries(
+            slides=planned_slides,
+            refs=refs,
+            settings=settings,
+            styles=styles,
+        )
+        for slide in reversed(bib_slides):
+            set_bib(slide.slide_index, bib_entries, settings)
+        return True
+
     def cite(
         self,
         keys: Sequence[str],
         settings: Settings | None = None,
     ) -> SlideRecord:
-        """Wstawia cytowanie (pojedyncze lub zbiorcze) w miejscu kursora i przelicza slajdy.
+        """Wstawia cytowanie (w miejscu kursora lub bezpośrednio do stopki – D26) i przelicza slajdy.
 
-        Przestrzega D10 (brak kursora w polu tekstowym -> `NoTextCursorError`, zero zmian)
-        oraz D13 (wielokrotny wybór i automatyczne scalanie sąsiednich cytowań przy kursorze).
-        Nie tworzy kopii zapasowej przy pojedynczym wstawieniu cytowania.
+        Przestrzega D26 (gdy brak kursora w polu tekstowym, dodaje przypis stopkowy `in_text=False`
+        na aktywnym slajdzie) oraz D13 (wielokrotny wybór i automatyczne scalanie sąsiednich cytowań
+        przy kursorze). Nie tworzy kopii zapasowej przy pojedynczym wstawieniu cytowania.
         """
         unique_keys = tuple(dict.fromkeys(keys))
         if not unique_keys or any(
@@ -76,24 +100,27 @@ class CitationEngine:
                 "Brak otwartej prezentacji lub aktywnego slajdu w PowerPoincie."
             )
 
-        # D10: wymagamy kursora w polu tekstowym przed jakąkolwiek zmianą i przed pobieraniem indeksu slajdu
-        if not self.slide_doc.has_text_cursor():
-            raise NoTextCursorError(
-                "Ustaw kursor w polu tekstowym na slajdzie przed wstawieniem cytowania."
-            )
-
+        has_cursor = self.slide_doc.has_text_cursor()
         active_slide_index = self.slide_doc.get_active_slide_index()
 
         effective_settings = self._resolve_settings(settings)
         slides_before = self.slide_doc.read_slides()
-
-        get_adj = getattr(self.slide_doc, "get_adjacent_citation_at_cursor", None)
-        adjacent_citation: Citation | None = (
-            get_adj() if callable(get_adj) else None
+        active_slide_id = next(
+            (s.slide_id for s in slides_before if s.slide_index == active_slide_index),
+            None,
         )
-        if adjacent_citation is not None:
-            target_citation_id = adjacent_citation.citation_id
-            target_keys = merge_citation_keys(adjacent_citation.keys, unique_keys)
+
+        if has_cursor:
+            get_adj = getattr(self.slide_doc, "get_adjacent_citation_at_cursor", None)
+            adjacent_citation: Citation | None = (
+                get_adj() if callable(get_adj) else None
+            )
+            if adjacent_citation is not None:
+                target_citation_id = adjacent_citation.citation_id
+                target_keys = merge_citation_keys(adjacent_citation.keys, unique_keys)
+            else:
+                target_citation_id = self._new_citation_id()
+                target_keys = unique_keys
         else:
             target_citation_id = self._new_citation_id()
             target_keys = unique_keys
@@ -114,7 +141,17 @@ class CitationEngine:
         if numeric:
             if effective_settings.numbering_mode == "global":
                 slides_up_to_active = [
-                    s
+                    (
+                        SlideRecord(
+                            slide_index=s.slide_index,
+                            slide_id=s.slide_id,
+                            citations=tuple(c for c in s.citations if c.in_text),
+                            footer_entries=s.footer_entries,
+                            has_bibliography=s.has_bibliography,
+                        )
+                        if has_cursor and s.slide_index == active_slide_index
+                        else s
+                    )
                     for s in slides_before
                     if s.slide_index <= active_slide_index
                 ]
@@ -128,11 +165,15 @@ class CitationEngine:
                     ),
                     None,
                 )
-                base_map = (
-                    assign_slide_numbers(active_before.citations)
-                    if active_before is not None
-                    else {}
-                )
+                if active_before is not None:
+                    preceding_cits = (
+                        [c for c in active_before.citations if c.in_text]
+                        if has_cursor
+                        else list(active_before.citations)
+                    )
+                    base_map = assign_slide_numbers(preceding_cits)
+                else:
+                    base_map = {}
             provisional_map = dict(base_map)
             for key in target_keys:
                 if key not in provisional_map:
@@ -146,13 +187,27 @@ class CitationEngine:
             is_numeric=numeric,
             number_map=provisional_map,
         )
-        new_citation = Citation(
-            citation_id=target_citation_id,
-            keys=target_keys,
-            text=initial_text,
-        )
 
-        self.slide_doc.insert_citation_at_cursor(new_citation)
+        if has_cursor:
+            new_citation = Citation(
+                citation_id=target_citation_id,
+                keys=target_keys,
+                text=initial_text,
+                in_text=True,
+            )
+            self.slide_doc.insert_citation_at_cursor(new_citation)
+        else:
+            new_citation = Citation(
+                citation_id=target_citation_id,
+                keys=unique_keys,
+                text="",
+                in_text=False,
+            )
+            add_footer = getattr(self.slide_doc, "add_footer_citation", None)
+            if callable(add_footer):
+                add_footer(new_citation)
+            else:
+                self.slide_doc.insert_citation_at_cursor(new_citation)
 
         slides_after = self.slide_doc.read_slides()
         planned_slides = compute_presentation_plan(
@@ -181,6 +236,31 @@ class CitationEngine:
             if is_active:
                 active_planned = planned
 
+        if self._refresh_existing_bibliographies(
+            planned_slides=planned_slides,
+            refs=refs,
+            settings=effective_settings,
+            styles=styles,
+        ):
+            slides_final = self.slide_doc.read_slides()
+            planned_slides = compute_presentation_plan(
+                slides=slides_final,
+                refs=refs,
+                settings=effective_settings,
+                styles=styles,
+            )
+            active_planned = next(
+                (
+                    s
+                    for s in planned_slides
+                    if active_slide_id is not None and s.slide_id == active_slide_id
+                ),
+                next(
+                    (s for s in planned_slides if s.slide_index == active_slide_index),
+                    active_planned,
+                ),
+            )
+
         self.slide_doc.save_settings(effective_settings)
 
         if active_planned is None:
@@ -205,7 +285,16 @@ class CitationEngine:
                 ),
                 active_planned.citations[-1] if active_planned.citations else new_citation,
             )
-        self.last_citation = matched_cit
+
+        if has_cursor:
+            self.last_citation = matched_cit
+        else:
+            self.last_citation = Citation(
+                citation_id=matched_cit.citation_id,
+                keys=matched_cit.keys,
+                text=initial_text,
+                in_text=False,
+            )
         return active_planned
 
     def rebuild(
@@ -263,8 +352,63 @@ class CitationEngine:
                 effective_settings,
             )
 
+        if self._refresh_existing_bibliographies(
+            planned_slides=planned_slides,
+            refs=refs,
+            settings=effective_settings,
+            styles=styles,
+        ):
+            slides_final = self.slide_doc.read_slides()
+            planned_slides = compute_presentation_plan(
+                slides=slides_final,
+                refs=refs,
+                settings=effective_settings,
+                styles=styles,
+            )
+
         self.slide_doc.save_settings(effective_settings)
         return planned_slides
+
+    def insert_bibliography(
+        self,
+        settings: Settings | None = None,
+    ) -> tuple[int, int]:
+        """Wstawia lub aktualizuje spis wszystkich wykorzystanych źródeł na aktywnym slajdzie (D27).
+
+        Zwraca `(liczba_źródeł, liczba_slajdów_bibliografii)`.
+        """
+        if not self.slide_doc.has_open_presentation():
+            raise NoActiveSlideError(
+                "Brak otwartej prezentacji lub aktywnego slajdu w PowerPoincie."
+            )
+
+        active_slide_index = self.slide_doc.get_active_slide_index()
+        effective_settings = self._resolve_settings(settings)
+        slides = self.slide_doc.read_slides()
+
+        all_keys = tuple(
+            dict.fromkeys(
+                k for slide in slides for cit in slide.citations for k in cit.keys
+            )
+        )
+        if not all_keys:
+            raise AzpError("Brak wykorzystanych źródeł w prezentacji.")
+
+        refs = self.zotero.get_formatted_refs(all_keys, effective_settings.style_id)
+        styles = self._get_styles()
+        bib_entries = build_presentation_bibliography_entries(
+            slides=slides,
+            refs=refs,
+            settings=effective_settings,
+            styles=styles,
+        )
+        slides_used = self.slide_doc.set_slide_bibliography(
+            active_slide_index,
+            bib_entries,
+            effective_settings,
+        )
+        self.slide_doc.save_settings(effective_settings)
+        return len(bib_entries), slides_used
 
     def apply_settings(self, new_settings: Settings) -> list[SlideRecord]:
         """Natychmiastowo przebudowuje całą prezentację z kopią zapasową po zmianie ustawień (D14)."""
@@ -320,3 +464,23 @@ class CitationEngine:
             return "Przebudowano prezentację."
 
         return _on_rebuild
+
+    def make_bibliography_callback(self) -> Callable[[Settings], str | None]:
+        """Zwraca callback `on_insert_bibliography` kompatybilny z `AzpController` (D27)."""
+
+        def _on_bibliography(settings: Settings) -> str | None:
+            try:
+                count, slides_used = self.insert_bibliography(settings=settings)
+            except KeyError as exc:
+                detail = exc.args[0] if exc.args else str(exc)
+                raise AzpError(
+                    f"Nie znaleziono opisu pozycji w Zotero: {detail}"
+                ) from exc
+
+            if slides_used > 1:
+                return (
+                    f"Wstawiono bibliografię ({count} źródeł) na {slides_used} slajdach."
+                )
+            return f"Wstawiono bibliografię ({count} źródeł) na slajdzie."
+
+        return _on_bibliography

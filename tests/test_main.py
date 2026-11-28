@@ -49,10 +49,28 @@ def test_build_window_wires_engine_and_returns_focus_after_cite_d20(tk_root: tk.
         assert [e.key for e in doc.read_slides()[0].footer_entries] == ["KOWAL2023", "NOWAK2024"]
         assert doc.focus_calls == 1
 
-        # Bez kursora: brak zmian i brak przełączania okna
+        # Bez kursora na aktywnym slajdzie (D26): przypis trafia do stopki na dole slajdu
+        doc.active_slide_index = 2
         doc.has_cursor = False
+        win.select_result_keys(["DOVE2013"])
+        assert win.cite_selected() is True
+        assert doc.get_slide_body_text(2) == "Tekst slajdu 2"
+        assert [e.key for e in doc.read_slides()[1].footer_entries] == ["DOVE2013"]
+        assert doc.focus_calls == 2
+
+        # Brak aktywnego slajdu: brak zmian i brak przełączania okna
+        doc.active_slide_index = None
         assert win.cite_selected() is False
-        assert doc.focus_calls == 1
+        assert doc.focus_calls == 2
+        doc.active_slide_index = 1
+
+        # Wstawienie bibliografii przez okienko (D27)
+        assert win.insert_bibliography() is True
+        assert [e.key for e in doc.get_slide_bibliography_entries(1)] == [
+            "KOWAL2023",
+            "NOWAK2024",
+            "DOVE2013",
+        ]
 
         # Przebudowa przez silnik – z kopią zapasową
         assert win.refresh_presentation() is True
@@ -184,13 +202,8 @@ def test_c1_window_drives_real_powerpoint_and_real_zotero_e2e(tk_root: tk.Tk) ->
         assert len(items) >= 2, "W bibliotece Zotero muszą znajdować się co najmniej 2 pozycje."
         key1, key2 = items[0].key, items[1].key
 
-        # 1. Blokada bez kursora (D10)
+        # 1. Cytowanie na niezapisanej prezentacji działa, ale przebudowa jest zablokowana (D18)
         win.select_result_keys([key1])
-        assert win.cite_selected() is False
-        assert "kursor" in win.get_status_message().lower()
-        assert box1.TextFrame.TextRange.Text == "Wstęp Ważne i wniosek"
-
-        # 2. Cytowanie na niezapisanej prezentacji działa, ale przebudowa jest zablokowana (D18)
         doc.set_cursor_target(1, "BodyBox1", len("Wstęp Ważne"))
         assert win.cite_selected() is True
         assert box1.TextFrame.TextRange.Text == "Wstęp Ważne [1] i wniosek"

@@ -7,11 +7,11 @@
 | D3 | 2026-11-27 | Drugi dostępny styl: APA 7 (`http://www.zotero.org/styles/apa`). Styl wybierany w okienku. |
 | D4 | 2026-11-27 | Numeracja IEEE: klasyczna, globalna (pierwsze wystąpienie); w okienku wybór trybu (globalna / od [1] na każdym slajdzie). |
 | D5 | 2026-11-27 | Czcionka stopek wybierana w okienku z listy czcionek zainstalowanych w systemie, z rozmiarem. |
-| D6 | 2026-11-27 | Bez slajdu „Bibliografia” na końcu. |
+| D6 | 2026-11-27 | Bez slajdu „Bibliografia” na końcu. *(zastąpione przez D27)* |
 | D7 | 2026-11-27 | Prace pogrupowane w ciągi, części niezależne równolegle. |
 | D8 | 2026-11-27 | Zasady pracy według `Clatir/RegulatedDay` (Zasady współpracy, skill `etap`), jak najdokładniej. |
 | D9 | 2026-11-27 | Położenie pola źródeł wybierane w okienku: (a) dół slajdu, cała szerokość, nad stopką PowerPointa; (b) lewy dolny róg, węższe; (c) w miejscu stopki PowerPointa. Do wyboru też: z nagłówkiem „Źródła:” albo same źródła bez nagłówka. |
-| D10 | 2026-11-27 | „Cytuj” bez kursora w polu tekstowym: nic nie zmieniać, tylko poprosić o ustawienie kursora. |
+| D10 | 2026-11-27 | „Cytuj” bez kursora w polu tekstowym: nic nie zmieniać, tylko poprosić o ustawienie kursora. *(zastąpione przez D26)* |
 | D11 | 2026-11-27 | Kod tylko lokalnie (git na tym komputerze), bez GitHuba. *(zastąpione przez D12)* |
 | D12 | 2026-11-27 | Publiczne repozytorium na GitHubie (`Clatir/zotero-ppt-assistant`), commity wypychane na bieżąco; bez danych użytkownika i osobistych treści (zastępuje D11). |
 | D13 | 2026-11-27 | Cytowania zbiorcze (np. `[1, 2]` lub `(Kowalski, 2023; Nowak, 2024)`): obsługiwany zarówno wielokrotny wybór na liście wyników w okienku (Ctrl/Shift), jak i automatyczne scalanie, gdy kursor przy wstawianiu stoi tuż przy istniejącym cytowaniu. |
@@ -26,3 +26,6 @@
 | D22 | 2026-11-27 | Uruchamianie z poziomu wstążki PowerPointa: natywny dodatek `AsystentZotero.ppam` instalowany w `%APPDATA%\Microsoft\AddIns` i rejestrowany w `HKCU\Software\Microsoft\Office\<ver>\PowerPoint\AddIns\AsystentZotero` (`AutoLoad=1`), dodający przycisk **Asystent Zotero** na karcie **Dodatki** oraz **Narzędzia główne** na wstążce PowerPointa (`install_pp_addin.bat` / `python -m azp --install-addin`). |
 | D23 | 2026-11-27 | Instalacja i aktualizacja jednym kliknięciem: skrypt `instaluj_lub_aktualizuj.bat` (`python -m azp --update`) oraz instrukcja `README.md` – pobiera najnowszą wersję z GitHuba (`git pull` lub archiwum ZIP, gdy projekt pobrano bez Gita), instaluje pakiety z `requirements.txt` i odświeża dodatek wstążki PowerPointa z zachowaniem ustawień użytkownika w `config.json`. |
 | D24 | 2026-11-27 | Automatyczna aktualizacja w tle po otwarciu okienka: nie opóźnia startu okienka; sprawdza w tle na GitHubie (`git pull --ff-only` lub porównanie SHA commita `main` z `.azp_version` i pobranie ZIP-a), a gdy faktycznie pobierze nową wersję, odświeża dodatek `.ppam` i automatycznie przeładowuje okienko (`--no-auto-update`). |
+| D25 | 2026-11-27 | Wybór kolekcji Zotero w okienku: lista rozwijana z kolekcjami i podkolekcjami Zotero (oraz opcją „Wszystkie pozycje (cała biblioteka)”); wybór kolekcji filtruje listę pozycji i wyszukiwanie do wybranej kolekcji. |
+| D26 | 2026-11-27 | „Cytuj” bez ustawionego kursora w polu tekstowym lub na slajdzie ze samymi zdjęciami / obiektami bez tekstu: przypis wstawia się bezpośrednio do pola źródeł (stopki) na dole aktywnego slajdu (bez wstawiania znacznika w treść slajdu), dostaje swój numer `[n]` wg kolejności slajdów (lub format APA) i wchodzi do bibliografii (zastępuje D10). |
+| D27 | 2026-11-27 | Przycisk „Wstaw bibliografię” w okienku: wstawia na aktywnym slajdzie spis wszystkich wykorzystanych źródeł w prezentacji bez żadnego nagłówka (a jeśli na slajdzie jest już bibliografia AZP – aktualizuje ją), z wyborem w okienku: czcionki bibliografii, rozmiaru czcionki, liczby kolumn na slajdzie (`1..4` kolumny) oraz trybu dopasowania: 1) *Zmniejsz czcionkę, by zmieścić na slajdzie (Auto-fit)*, 2) *Stała czcionka (dopasuj ramkę do tekstu)*, 3) *Podziel automatycznie na kolejne slajdy* (zastępuje D6). |
