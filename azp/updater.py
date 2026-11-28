@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -15,6 +16,43 @@ GITHUB_ARCHIVE_ZIP_URL = "https://github.com/Clatir/zotero-ppt-assistant/archive
 GITHUB_COMMIT_SHA_URL = "https://api.github.com/repos/Clatir/zotero-ppt-assistant/commits/main"
 PRESERVED_RELATIVE_PATHS = frozenset({"config.json", ".azp_version"})
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+
+
+def _hidden_git_subprocess_kwargs() -> dict[str, object]:
+    """Zwraca parametry `subprocess.run` ukrywające okno konsoli `git.exe` pod Windows (`pythonw.exe`)."""
+    kwargs: dict[str, object] = {
+        "env": {
+            **os.environ,
+            "GIT_TERMINAL_PROMPT": "0",
+            "GCM_INTERACTIVE": "never",
+        },
+    }
+    create_no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if create_no_window:
+        kwargs["creationflags"] = create_no_window
+    startupinfo_cls = getattr(subprocess, "STARTUPINFO", None)
+    if startupinfo_cls is not None:
+        si = startupinfo_cls()
+        si.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 1)
+        si.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+        kwargs["startupinfo"] = si
+    return kwargs
+
+
+def _run_git(
+    cmd: list[str],
+    cwd: Path,
+    timeout: float,
+) -> subprocess.CompletedProcess[str]:
+    """Uruchamia polecenie `git` bez otwierania widocznego okna terminala."""
+    return subprocess.run(
+        cmd,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        **_hidden_git_subprocess_kwargs(),
+    )
 
 
 def fetch_remote_main_sha(
@@ -55,11 +93,9 @@ def update_from_git(project_root: Path) -> tuple[bool, str]:
         return False, "Brak repozytorium Git lub programu git."
 
     try:
-        status = subprocess.run(
+        status = _run_git(
             ["git", "status", "--porcelain", "--untracked-files=no"],
             cwd=project_root,
-            capture_output=True,
-            text=True,
             timeout=30,
         )
     except (OSError, subprocess.SubprocessError) as exc:
@@ -76,11 +112,9 @@ def update_from_git(project_root: Path) -> tuple[bool, str]:
         )
 
     try:
-        pull = subprocess.run(
+        pull = _run_git(
             ["git", "pull", "--ff-only"],
             cwd=project_root,
-            capture_output=True,
-            text=True,
             timeout=30,
         )
     except (OSError, subprocess.SubprocessError) as exc:
@@ -190,11 +224,9 @@ def update_project_code(
 
 def _auto_update_git(root: Path, timeout: float) -> tuple[bool, str]:
     try:
-        status = subprocess.run(
+        status = _run_git(
             ["git", "status", "--porcelain", "--untracked-files=no"],
             cwd=root,
-            capture_output=True,
-            text=True,
             timeout=timeout,
         )
     except (OSError, subprocess.SubprocessError):
@@ -204,11 +236,9 @@ def _auto_update_git(root: Path, timeout: float) -> tuple[bool, str]:
         return False, "Pominięto auto-aktualizację (lokalne zmiany lub błąd git status)."
 
     try:
-        old_head = subprocess.run(
+        old_head = _run_git(
             ["git", "rev-parse", "HEAD"],
             cwd=root,
-            capture_output=True,
-            text=True,
             timeout=timeout,
         )
     except (OSError, subprocess.SubprocessError):
@@ -219,11 +249,9 @@ def _auto_update_git(root: Path, timeout: float) -> tuple[bool, str]:
     old_sha = old_head.stdout.strip()
 
     try:
-        pull = subprocess.run(
+        pull = _run_git(
             ["git", "pull", "--ff-only"],
             cwd=root,
-            capture_output=True,
-            text=True,
             timeout=timeout,
         )
     except (OSError, subprocess.SubprocessError):
@@ -233,11 +261,9 @@ def _auto_update_git(root: Path, timeout: float) -> tuple[bool, str]:
         return False, "git pull nie powiódł się."
 
     try:
-        new_head = subprocess.run(
+        new_head = _run_git(
             ["git", "rev-parse", "HEAD"],
             cwd=root,
-            capture_output=True,
-            text=True,
             timeout=timeout,
         )
         new_sha = new_head.stdout.strip() if new_head.returncode == 0 else ""

@@ -930,3 +930,77 @@ def test_background_auto_update_and_reload_window(
     )
     assert main(["--no-auto-update"]) == 0
     assert skipped == ["run"]
+
+
+def test_git_updater_and_reload_hide_console_windows_on_windows(
+    tk_root: tk.Tk, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Wszystkie wywołania subprocess w updater.py i main.py muszą ukrywać okno konsoli (CREATE_NO_WINDOW + SW_HIDE)."""
+    from azp.main import reload_window_after_update
+    from azp.updater import auto_update_if_needed, update_from_git
+
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr("azp.updater.shutil.which", lambda _name: "git")
+    monkeypatch.setattr("azp.updater.subprocess.CREATE_NO_WINDOW", 0x08000000, raising=False)
+
+    captured_runs: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured_runs.append((cmd, dict(kwargs)))
+        if cmd[:2] == ["git", "rev-parse"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout=("1" * 40) + "\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("azp.updater.subprocess.run", fake_run)
+
+    ok, _ = update_from_git(tmp_path)
+    assert ok is True
+    changed, _ = auto_update_if_needed(project_root=tmp_path)
+    assert changed is False
+    assert len(captured_runs) == 6  # 2 w update_from_git + 4 w _auto_update_git
+
+    for _cmd, kw in captured_runs:
+        assert kw.get("creationflags") == 0x08000000
+        si = kw.get("startupinfo")
+        if hasattr(subprocess, "STARTUPINFO"):
+            assert si is not None
+            assert getattr(si, "wShowWindow", None) == 0
+            assert (getattr(si, "dwFlags", 0) & getattr(subprocess, "STARTF_USESHOWWINDOW", 1)) != 0
+        env = kw.get("env")
+        assert isinstance(env, dict)
+        assert env.get("GIT_TERMINAL_PROMPT") == "0"
+        assert env.get("GCM_INTERACTIVE") == "never"
+
+    # reload_window_after_update również przekazuje creationflags=CREATE_NO_WINDOW i używa pythonw.exe
+    fake_py_dir = tmp_path / "py"
+    fake_py_dir.mkdir()
+    fake_python = fake_py_dir / "python.exe"
+    fake_pythonw = fake_py_dir / "pythonw.exe"
+    fake_python.write_bytes(b"MZ")
+    fake_pythonw.write_bytes(b"MZ")
+    monkeypatch.setattr("azp.main.sys.executable", str(fake_python))
+    monkeypatch.setattr("azp.main.subprocess.CREATE_NO_WINDOW", 0x08000000, raising=False)
+
+    popen_calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_popen(cmd: list[str], **kwargs: object) -> object:
+        popen_calls.append((cmd, dict(kwargs)))
+        return object()
+
+    win = AzpWindow(
+        zotero=FakeZoteroSource(),
+        slide_doc=FakeSlideDoc(),
+        master=tk_root,
+        poll_interval_ms=None,
+    )
+    assert reload_window_after_update(win, "Aktualizacja", popen_fn=fake_popen) is True
+    assert len(popen_calls) == 1
+    popen_cmd, popen_kw = popen_calls[0]
+    assert Path(popen_cmd[0]).name.lower() == "pythonw.exe"
+    assert popen_kw.get("creationflags") == 0x08000000
+    si_popen = popen_kw.get("startupinfo")
+    if hasattr(subprocess, "STARTUPINFO"):
+        assert si_popen is not None
+        assert getattr(si_popen, "wShowWindow", None) == 0
+        assert (getattr(si_popen, "dwFlags", 0) & getattr(subprocess, "STARTF_USESHOWWINDOW", 1)) != 0
+

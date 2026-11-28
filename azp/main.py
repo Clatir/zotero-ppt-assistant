@@ -138,6 +138,28 @@ def focus_existing_azp_window() -> bool:
     return False
 
 
+def _resolve_pythonw_executable(python_executable: Path | None = None) -> Path:
+    exe = Path(python_executable) if python_executable is not None else Path(sys.executable)
+    candidate = exe.with_name("pythonw.exe")
+    if candidate.exists():
+        return candidate
+    return exe
+
+
+def _hidden_popen_kwargs() -> dict[str, object]:
+    kwargs: dict[str, object] = {}
+    create_no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if create_no_window:
+        kwargs["creationflags"] = create_no_window
+    startupinfo_cls = getattr(subprocess, "STARTUPINFO", None)
+    if startupinfo_cls is not None:
+        si = startupinfo_cls()
+        si.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 1)
+        si.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+        kwargs["startupinfo"] = si
+    return kwargs
+
+
 def reload_window_after_update(
     window: AzpWindow,
     message: str,
@@ -154,9 +176,11 @@ def reload_window_after_update(
     window.status_var.set("Pobrano aktualizację – przeładowywanie okienka...")
     window.root.withdraw()
     try:
+        py_exe = _resolve_pythonw_executable()
         popen_fn(
-            [sys.executable, "-m", "azp", "--no-auto-update"],
+            [str(py_exe), "-m", "azp", "--no-auto-update"],
             cwd=str(Path(__file__).resolve().parent.parent),
+            **_hidden_popen_kwargs(),
         )
     except Exception:
         window.root.deiconify()
