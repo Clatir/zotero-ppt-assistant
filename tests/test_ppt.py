@@ -23,6 +23,7 @@ from azp.ppt import (
     PP_PLACEHOLDER_FOOTER,
     PP_SELECTION_TEXT,
     PowerPointSlideDoc,
+    TAG_CITATIONS,
     TAG_ROLE,
     TAG_ROLE_FOOTER,
     apply_citation_at_cursor_in_text,
@@ -77,6 +78,17 @@ def _is_powerpoint_running() -> bool:
         check=False,
     )
     return "powerpnt.exe" in res.stdout.lower()
+
+
+def _ensure_powerpoint_not_running(timeout_seconds: float = 6.0) -> bool:
+    import time
+
+    start = time.time()
+    while time.time() - start < timeout_seconds:
+        if not _is_powerpoint_running():
+            return True
+        time.sleep(0.3)
+    return not _is_powerpoint_running()
 
 
 # ---------------------------------------------------------------------------
@@ -1745,6 +1757,42 @@ def test_get_slide_bibliography_keys_from_tag_and_continuation_slides_d28() -> N
         pres.Slides.__class__.Add = orig_add  # type: ignore[method-assign]
 
 
+def test_read_slide_and_empty_slide_fast_path() -> None:
+    """Testuje odczyt pojedynczego slajdu read_slide() oraz szybką ścieżkę dla slajdów bez cytowań."""
+    box1 = MockShape(name="Title", text="Tytuł prezentacji")
+    box2 = MockShape(name="Content", text="Treść punktu bez cytowań")
+    slide1 = MockSlide(shapes=[box1, box2], slide_id=101)
+
+    box3 = MockShape(name="Body", text="Slajd z cytowaniem [1]")
+    cit = Citation(citation_id="cit-fast-1", keys=("KOWAL2023",), text="[1]")
+    box3.Tags.Add(TAG_CITATIONS, serialize_citations([cit]))
+    slide2 = MockSlide(shapes=[box3], slide_id=102)
+    slide2.Tags.Add(TAG_CITATIONS, serialize_citations([cit]))
+
+    pres = MockPresentation(slides=[slide1, slide2])
+    doc = PowerPointSlideDoc(presentation=pres)
+
+    # 1. read_slide(1): slajd bez cytowań
+    rec1 = doc.read_slide(1)
+    assert rec1.slide_index == 1
+    assert rec1.slide_id == 101
+    assert rec1.citations == ()
+    assert rec1.has_bibliography is False
+
+    # 2. read_slide(2): slajd z cytowaniem
+    rec2 = doc.read_slide(2)
+    assert rec2.slide_index == 2
+    assert rec2.slide_id == 102
+    assert len(rec2.citations) == 1
+    assert rec2.citations[0].keys == ("KOWAL2023",)
+
+    # 3. read_slides(): zwraca oba slajdy
+    all_recs = doc.read_slides()
+    assert len(all_recs) == 2
+    assert all_recs[0] == rec1
+    assert all_recs[1] == rec2
+
+
 # ---------------------------------------------------------------------------
 # Testy integracyjne COM (@pytest.mark.com)
 # ---------------------------------------------------------------------------
@@ -1753,7 +1801,7 @@ def test_get_slide_bibliography_keys_from_tag_and_continuation_slides_d28() -> N
 @pytest.mark.com
 def test_powerpoint_com_b21_full_workflow() -> None:
     """Kompleksowy test integracyjny COM dla etapu B2.1 na pliku `tests/data/test_ppt_b21.pptx`."""
-    if _is_powerpoint_running():
+    if not _ensure_powerpoint_not_running():
         pytest.fail("PowerPoint jest uruchomiony! Zamknij PowerPointa przed testami COM.")
 
     import pythoncom
@@ -2040,6 +2088,12 @@ def test_powerpoint_com_b21_full_workflow() -> None:
         pres.Close()
         pres = None
     finally:
+        if doc is not None:
+            doc.invalidate_cache()
+            doc = None
+        if reopened_doc is not None:
+            reopened_doc.invalidate_cache()
+            reopened_doc = None
         if pres is not None:
             try:
                 pres.Close()

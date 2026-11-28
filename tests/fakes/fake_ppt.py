@@ -272,6 +272,19 @@ class FakeSlideDoc:
 
         return len(chunks)
 
+    def read_slide(self, slide_index: int) -> SlideRecord:
+        s = self._get_slide(slide_index)
+        return SlideRecord(
+            slide_index=slide_index,
+            slide_id=s.slide_id,
+            citations=tuple(s.citations),
+            footer_entries=tuple(s.footer_entries),
+            has_bibliography=bool(s.bibliography_entries) and not s.is_bib_continuation,
+        )
+
+    def invalidate_cache(self) -> None:
+        pass
+
     def read_slides(self) -> list[SlideRecord]:
         return [
             SlideRecord(

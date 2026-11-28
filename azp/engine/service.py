@@ -244,7 +244,19 @@ class CitationEngine:
             else:
                 self.slide_doc.insert_citation_at_cursor(new_citation)
 
-        slides_after = self.slide_doc.read_slides()
+        read_slide_fn = getattr(self.slide_doc, "read_slide", None)
+        if callable(read_slide_fn):
+            try:
+                active_after = read_slide_fn(active_slide_index)
+                slides_after = [
+                    active_after if s.slide_index == active_slide_index else s
+                    for s in slides_before
+                ]
+            except Exception:
+                slides_after = self.slide_doc.read_slides()
+        else:
+            slides_after = self.slide_doc.read_slides()
+
         planned_slides = compute_presentation_plan(
             slides=slides_after,
             refs=refs,
@@ -346,6 +358,13 @@ class CitationEngine:
         if create_backup and self.slide_doc.get_presentation_path() is None:
             raise BackupError(MSG_SAVE_BEFORE_REBUILD)
 
+        inv = getattr(self.slide_doc, "invalidate_cache", None)
+        if callable(inv):
+            inv()
+        clear_zot = getattr(self.zotero, "clear_cache", None)
+        if callable(clear_zot):
+            clear_zot()
+
         effective_settings = self._resolve_settings(settings)
         slides = self.slide_doc.read_slides()
 
@@ -421,6 +440,13 @@ class CitationEngine:
             )
 
         active_slide_index = self.slide_doc.get_active_slide_index()
+        inv = getattr(self.slide_doc, "invalidate_cache", None)
+        if callable(inv):
+            inv()
+        clear_zot = getattr(self.zotero, "clear_cache", None)
+        if callable(clear_zot):
+            clear_zot()
+
         effective_settings = self._resolve_settings(settings)
         slides = self.slide_doc.read_slides()
 

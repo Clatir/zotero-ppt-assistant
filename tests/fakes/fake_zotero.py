@@ -190,6 +190,7 @@ class FakeZoteroSource:
             if collection_items is not None
             else _default_collection_items()
         )
+        self.clear_cache_calls = 0
         self._styles: list[StyleInfo] = [
             StyleInfo(
                 style_id=STYLE_IEEE_V4,
@@ -202,6 +203,9 @@ class FakeZoteroSource:
                 is_numeric=False,
             ),
         ]
+
+    def clear_cache(self) -> None:
+        self.clear_cache_calls += 1
 
     def _check_online(self) -> None:
         if self.offline:

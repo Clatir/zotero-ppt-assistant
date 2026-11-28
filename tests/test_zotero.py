@@ -807,6 +807,58 @@ def test_list_collections_resilience_malformed_json_and_self_cycle_m3() -> None:
     ]
 
 
+def test_formatted_refs_caching_and_clear_cache() -> None:
+    """Testuje, że get_formatted_ref/get_formatted_refs buforuje wyniki w pamięci i clear_cache czyści bufor."""
+    requests_log: list[str] = []
+
+    def _handler(url: str, params: dict[str, Any] | None, _timeout: float | None) -> _FakeResponse:
+        requests_log.append(url)
+        if "/items/KOWAL2023" in url:
+            return _FakeResponse(
+                200,
+                {
+                    "csl-json": {"author": [{"family": "Kowalski"}]},
+                    "csl-citation": "[1]",
+                    "csl-bib": '<div class="csl-bib-body"><div class="csl-entry">[1] J. Kowalski, 2023.</div></div>',
+                },
+            )
+        if url.endswith("/items") and params and "NOWAK2024" in params.get("itemKey", ""):
+            return _FakeResponse(
+                200,
+                [
+                    {
+                        "key": "NOWAK2024",
+                        "citation": "[2]",
+                        "bib": '<div class="csl-entry">[2] A. Nowak, 2024.</div>',
+                    }
+                ],
+            )
+        return _FakeResponse(404, {})
+
+    client = ZoteroClient(session=_FakeSession(_handler))
+
+    # Pierwsze pobranie: zapytanie sieciowe
+    ref1 = client.get_formatted_ref("KOWAL2023", STYLE_IEEE_V4)
+    assert ref1.key == "KOWAL2023"
+    assert len(requests_log) == 1
+
+    # Drugie pobranie: z pamięci podręcznej (brak nowego zapytania)
+    ref1_cached = client.get_formatted_ref("KOWAL2023", STYLE_IEEE_V4)
+    assert ref1_cached == ref1
+    assert len(requests_log) == 1
+
+    # get_formatted_refs dla KOWAL2023 i NOWAK2024: tylko NOWAK2024 powinien wykonać zapytanie
+    batch = client.get_formatted_refs(["KOWAL2023", "NOWAK2024"], STYLE_IEEE_V4)
+    assert set(batch.keys()) == {"KOWAL2023", "NOWAK2024"}
+    assert len(requests_log) == 2
+
+    # clear_cache() czyści bufor
+    client.clear_cache()
+    ref1_after_clear = client.get_formatted_ref("KOWAL2023", STYLE_IEEE_V4)
+    assert ref1_after_clear.key == "KOWAL2023"
+    assert len(requests_log) == 3
+
+
 # ---------------------------------------------------------------------------
 # Test integracyjny z żywym lokalnym API Zotero 10
 # ---------------------------------------------------------------------------

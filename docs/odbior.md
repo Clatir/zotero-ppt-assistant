@@ -48,6 +48,10 @@ Nie przechodzi, gdy.
   - *Jak sprawdzić:* uruchom `python -m pytest -q` oraz (przy zamkniętym PowerPoincie) `python -m pytest -q -m com`.
   - *Oczekiwany efekt:* przechodzą wszystkie testy bez COM (`185 passed`) oraz testy COM (`3 passed`); sprawdzane są: pobieranie hierarchii kolekcji Zotero i filtrowanie wyników po wybranej kolekcji (D25), wstawianie przypisu bezpośrednio do stopki na dole aktywnego slajdu, gdy nie ustawiono kursora w tekście lub na slajdzie są same zdjęcia (D26), przycisk *Wstaw bibliografię* wstawiający na aktywnym slajdzie spis wszystkich wykorzystanych źródeł bez żadnego nagłówka (zbierający źródła z cytowań w tekście, przypisów stopkowych i istniejących stopek, a w prezentacji bez cytowań – z pozycji zaznaczonych na liście w okienku lub wybranej kolekcji – D27, D28) oraz przycisk `▸ Pokaż ustawienia` / `▾ Ukryj ustawienia` (domyślnie zwinięty, dopasowujący wysokość okna i pamiętający stan w `config.json` – D29).
   - *Nie przechodzi, gdy:* którykolwiek ze 185 testów jednostkowych lub 3 testów COM zgłasza błąd.
+- **T16 Optymalizacja wydajności wstawiania cytowań i bibliografii (poniżej 1 sekundy na slajd)** – **Automatycznie:** `tests/test_zotero.py` (test cache'owania i `clear_cache`), `tests/test_engine.py` (test użycia `read_slide`), `tests/test_ppt.py` (szybka ścieżka bez tagów i `read_slide`)
+  - *Jak sprawdzić:* uruchom `python -m pytest -q` oraz sprawdź czas wstawienia cytowania lub bibliografii w okienku na prezentacji z wieloma slajdami.
+  - *Oczekiwany efekt:* wstawienie cytowania (*Cytuj*) oraz wstawienie bibliografii wykonują się w ułamku sekundy (<1 s zamiast 15–26 s).
+  - *Nie przechodzi, gdy:* wstawienie cytowania na prezentacji 20-slajdowej trwa dłużej niż 2 sekundy.
 - **C3.1 Odbiór ręczny na Twojej prezentacji w PowerPoincie** – **Tylko Ty:** uruchomienie okienka z przycisku **Asystent Zotero** na wstążce PowerPointa (karta **Dodatki** lub **Narzędzia główne**) albo dwuklikiem w `start_azp.bat` obok otwartego PowerPointa i Zotero 10
   - *Jak sprawdzić:*
     1. Uruchom Zotero 10 i otwórz (lub zrestartuj, jeśli był otwarty przed instalacją dodatku) PowerPointa ze swoją prezentacją `.pptx`.

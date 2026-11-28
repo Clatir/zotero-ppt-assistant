@@ -25,6 +25,17 @@ def _is_powerpoint_running() -> bool:
     return "powerpnt.exe" in res.stdout.lower()
 
 
+def _ensure_powerpoint_not_running(timeout_seconds: float = 6.0) -> bool:
+    import time
+
+    start = time.time()
+    while time.time() - start < timeout_seconds:
+        if not _is_powerpoint_running():
+            return True
+        time.sleep(0.3)
+    return not _is_powerpoint_running()
+
+
 def test_zotero_local_api_responds_ieee_v4_and_apa() -> None:
     """Sprawdza, czy lokalne API Zotero 10 odpowiada i formatuje w stylu v4 oraz APA."""
     for style_id, expected_marker in ((STYLE_IEEE_V4, "[1]"), (STYLE_APA, "csl-entry")):
@@ -49,7 +60,7 @@ def test_zotero_local_api_responds_ieee_v4_and_apa() -> None:
 @pytest.mark.com
 def test_powerpoint_com_open_tag_save_and_close() -> None:
     """Sprawdza utworzenie, zapis, ponowne otwarcie i zamknięcie prezentacji testowej przez COM."""
-    if _is_powerpoint_running():
+    if not _ensure_powerpoint_not_running():
         pytest.fail("PowerPoint jest uruchomiony! Zamknij PowerPointa przed testami COM.")
 
     import pythoncom

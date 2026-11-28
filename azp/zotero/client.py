@@ -134,6 +134,12 @@ class ZoteroClient:
                 STYLE_IEEE_FALLBACK,
             }
         )
+        self._ref_cache: dict[tuple[str, str], FormattedRef] = {}
+        self._resolved_styles: dict[str, str] = {}
+
+    def clear_cache(self) -> None:
+        """Czyści pamięć podręczną sformatowanych opisów bibliograficznych."""
+        self._ref_cache.clear()
 
     @property
     def base_url(self) -> str:
@@ -178,10 +184,16 @@ class ZoteroClient:
         *,
         allow_404: bool = False,
     ) -> Any:
+        req_style = params.get("style")
+        if req_style and req_style in self._resolved_styles:
+            effective_params = {**params, "style": self._resolved_styles[req_style]}
+            return self._request_json(path, params=effective_params, allow_404=allow_404)
+
         try:
             return self._request_json(path, params=params, allow_404=allow_404)
         except ZoteroOfflineError as exc:
             if params.get("style") == STYLE_IEEE_V4 and "(HTTP 400)" in str(exc):
+                self._resolved_styles[STYLE_IEEE_V4] = STYLE_IEEE_FALLBACK
                 fallback_params = {**params, "style": STYLE_IEEE_FALLBACK}
                 return self._request_json(
                     path, params=fallback_params, allow_404=allow_404
@@ -400,6 +412,10 @@ class ZoteroClient:
         if not clean_key:
             raise KeyError("Pusty klucz pozycji Zotero.")
 
+        cache_key = (clean_key, style_id)
+        if cache_key in self._ref_cache:
+            return self._ref_cache[cache_key]
+
         payload = self._request_with_style_fallback(
             f"/items/{clean_key}",
             params={
@@ -411,7 +427,9 @@ class ZoteroClient:
         if payload is None or not isinstance(payload, dict):
             raise KeyError(f"Brak pozycji o kluczu {key!r} w Zotero.")
 
-        return self._build_formatted_ref(payload, clean_key, style_id)
+        ref = self._build_formatted_ref(payload, clean_key, style_id)
+        self._ref_cache[cache_key] = ref
+        return ref
 
     def get_formatted_refs(
         self,
@@ -435,9 +453,12 @@ class ZoteroClient:
             single_key = unique_keys[0]
             return {single_key: self.get_formatted_ref(single_key, style_id)}
 
-        results: dict[str, FormattedRef] = {}
-        for start in range(0, len(unique_keys), _BATCH_SIZE):
-            chunk = unique_keys[start : start + _BATCH_SIZE]
+        missing_keys = [k for k in unique_keys if (k, style_id) not in self._ref_cache]
+        if not missing_keys:
+            return {k: self._ref_cache[(k, style_id)] for k in unique_keys}
+
+        for start in range(0, len(missing_keys), _BATCH_SIZE):
+            chunk = missing_keys[start : start + _BATCH_SIZE]
             wanted = set(chunk)
             payload = self._request_with_style_fallback(
                 "/items",
@@ -453,16 +474,16 @@ class ZoteroClient:
                     if not isinstance(entry, dict):
                         continue
                     entry_key = str(entry.get("key") or "").strip()
-                    if entry_key in wanted and entry_key not in results:
-                        results[entry_key] = self._build_formatted_ref(
+                    if entry_key in wanted and (entry_key, style_id) not in self._ref_cache:
+                        self._ref_cache[(entry_key, style_id)] = self._build_formatted_ref(
                             entry, entry_key, style_id
                         )
 
             for key in chunk:
-                if key not in results:
-                    results[key] = self.get_formatted_ref(key, style_id)
+                if (key, style_id) not in self._ref_cache:
+                    self._ref_cache[(key, style_id)] = self.get_formatted_ref(key, style_id)
 
-        return {key: results[key] for key in unique_keys}
+        return {key: self._ref_cache[(key, style_id)] for key in unique_keys}
 
     def list_styles(self) -> list[StyleInfo]:
         """Zwraca listę dostępnych stylów cytowania (IEEE v4 oraz APA 7)."""

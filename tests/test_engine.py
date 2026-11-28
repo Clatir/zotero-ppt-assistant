@@ -988,6 +988,50 @@ def test_footer_citation_then_in_text_citation_on_same_slide_order_consistency_d
     assert [e.prefix for e in s1_both.footer_entries] == ["[1] ", "[2] "]
 
 
+def test_cite_uses_read_slide_optimization_and_rebuild_clears_cache() -> None:
+    """Testuje, że cite() używa read_slide() dla aktywnego slajdu zamiast read_slides(), a rebuild() czyści cache."""
+    class TrackingSlideDoc(FakeSlideDoc):
+        def __init__(self) -> None:
+            super().__init__(slide_count=5, active_slide_index=3, has_cursor=True)
+            self.read_slides_count = 0
+            self.read_slide_calls: list[int] = []
+            self.invalidated_count = 0
+
+        def read_slides(self) -> list[SlideRecord]:
+            self.read_slides_count += 1
+            return super().read_slides()
+
+        def read_slide(self, slide_index: int) -> SlideRecord:
+            self.read_slide_calls.append(slide_index)
+            return super().read_slide(slide_index)
+
+        def invalidate_cache(self) -> None:
+            self.invalidated_count += 1
+            super().invalidate_cache()
+
+    zotero = FakeZoteroSource()
+    doc = TrackingSlideDoc()
+    engine = CitationEngine(zotero, doc)
+
+    # Przed cite(): 0 wywołań
+    assert doc.read_slides_count == 0
+    assert doc.read_slide_calls == []
+
+    # cite() na slajdzie 3:
+    # 1. read_slides() dla slides_before
+    # 2. read_slide(3) dla aktywnego slajdu po wstawieniu (zamiast ponownego read_slides()!)
+    engine.cite(["KOWAL2023"])
+    assert doc.read_slides_count == 1  # Tylko początkowy slides_before
+    assert doc.read_slide_calls == [3]  # Odczytano tylko slajd 3
+
+    # rebuild(): wywołuje invalidate_cache() i clear_cache()
+    assert doc.invalidated_count == 0
+    assert zotero.clear_cache_calls == 0
+    engine.rebuild()
+    assert doc.invalidated_count == 1
+    assert zotero.clear_cache_calls == 1
+
+
 # ---------------------------------------------------------------------------
 # D3: Naprawa bibliografii (źródła ze stopek, zaznaczone pozycje fallback_keys,
 # zachowanie samodzielnej bibliografii podczas przebudowy – D28, T15)

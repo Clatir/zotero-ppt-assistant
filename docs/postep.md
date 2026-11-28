@@ -6,7 +6,7 @@
   - **Ciąg B – Rdzeń** (Tor B1: **B1.1 Klient Zotero**, **B1.2 Okienko**; Tor B2: **B2.1 Warstwa PowerPoint**, **B2.2 Silnik numeracji i stylów**).
   - **Ciąg C – Integracja i odbiór:** etapy kodowe **C1 Integracja** (`xhigh`), **C2 Dodatki** (`high`) oraz poprawki audytowe + **Tryb ciemny** (D21) + **Dodatek wstążki PowerPointa `.ppam`** (D22, T11, T12) + **Instalator i auto-aktualizacja w tle** (D23, D24, T13) zakończone.
   - **Ciąg D – Kolekcje Zotero, cytowanie bez kursora i bibliografia:** etapy **D1 Kontrakty i atrapy**, **D2.1 Kolekcje Zotero i GUI (Tor B1)** (`high`, 2 rundy), **D2.2 Warstwa PowerPoint i silnik (Tor B2)** (`xhigh`, 2 rundy) oraz **D3 Naprawa bibliografii i zwijane ustawienia** (`xhigh`, 3 rundy) zakończone, commity wypchnięte na GitHuba.
-- **Pełny zestaw testów:** `185 passed` bez COM + `3 passed` COM (`-m com`).
+- **Pełny zestaw testów:** `188 passed` bez COM + `3 passed` COM (`-m com`).
 - **Następny krok:** **Etap C3 Odbiór na Twojej prezentacji** (wspólny odbiór na żywo według listy w `docs/odbior.md`).
 
 ## Kolejka
@@ -16,8 +16,33 @@
 | B – Rdzeń (tory B1 i B2 równolegle) | gotowe (B1.1, B1.2, B2.1, B2.2) |
 | C – Integracja i odbiór | C1, C2 + poprawki audytu, tryb ciemny (D21), wstążka PP (D22) i auto-aktualizacja (D23, D24) gotowe; gotowe do C3 (Odbiór na Twojej prezentacji) |
 | D – Kolekcje Zotero, cytowanie bez kursora i bibliografia | gotowe (D1, D2.1, D2.2, D3; D25–D29, T14–T15) |
+| Optymalizacja wydajności (T16) | gotowe (skrócenie `cite()` i bibliografii do <1 s) |
 
 ## Zrealizowane etapy
+
+### Optymalizacja wydajności wstawiania cytowań i bibliografii (2026-11-28, T16)
+- **Zakres:**
+  - **Diagnoza opóźnień:** profilowanie warstwy COM wykazało, że odczyt 20 slajdów trwał 10,4 s (wielokrotne pętle po kształtach per slajd, odczyt tekstu ze wszystkich kształtów nawet bez cytowań, wyjątki COM na kształtach niebędących grupami/tabelami), `cite()` wywoływał pełny odczyt prezentacji 2-3 razy (łącznie 15–26 s), a Zotero wielokrotnie formatowało te same pozycje przez CSL.
+  - **Warstwa COM PowerPoint (`azp/ppt/com_doc.py`):**
+    1. *Jednoprzebiegowa klasyfikacja kształtów (`_classify_slide_shapes`)*: kształty ciała slajdu, stopki (`TAG_ROLE_FOOTER`) oraz bibliografii (`TAG_ROLE_BIBLIOGRAPHY`) są wykrywane w jednej pętli po `slide.Shapes`.
+    2. *Szybka ścieżka dla slajdów bez cytowań (`_get_citations_by_shape`)*: jeśli ani slajd, ani jego kształty nie mają tagu `AZP_CITATIONS`, funkcja natychmiast zwraca kształty bez odczytywania właściwości `TextRange.Text` (oszczędność setek wywołań RPC na prezentację).
+    3. *Filtrowanie typów kształtów przed zapytaniami COM*: sprawdzanie `shape.Type` (`msoTable = 19`, `msoGroup = 6`, `msoPlaceholder = 14`) zapobiega rzucaniu powolnych wyjątków COM na zwykłych figurach, liniach i obrazach.
+    4. *Eliminacja nadmiarowych zapisów pustych tagów*: `_sync_slide_citations_from_shapes` nie zapisuje pustych tagów `"[]"` na kształtach bez cytowań.
+    5. *Metody `read_slide(idx)` i `invalidate_cache()`*: odczyt tylko jednego wskazanego slajdu oraz czyszczenie buforowanego uchwytu aplikacji `Application`.
+    6. *Buforowanie uchwytu `TextRange.Font`* w `set_slide_footer` i `_render_bibliography_on_single_slide`.
+  - **Silnik cytowań (`azp/engine/service.py`):**
+    1. W `cite()` odczyt stanu slajdów po wstawieniu cytowania używa `slide_doc.read_slide(active_slide_index)` dla slajdu aktywnego zamiast ponownego skanowania całej prezentacji.
+    2. W `rebuild()` i `insert_bibliography()` wywoływane jest unieważnienie pamięci podręcznej dokumentu i klienta Zotero.
+  - **Klient Zotero (`azp/zotero/client.py`):**
+    1. Buforowanie w pamięci wyników `FormattedRef` (`_ref_cache`) i rozwiązywania stylów (`_resolved_styles`).
+    2. Metoda `clear_cache()` czyszcząca bufor przed przebudową prezentacji.
+    3. `get_formatted_refs` pobiera przez HTTP tylko brakujące klucze.
+- **Wyniki pomiarów (prezentacja 20 slajdów):**
+  - `read_slides()`: z **10.4 s** do **0.75 s** (14x szybciej).
+  - `cite()` (wstawienie cytowania + aktualizacja stopki): z **15–26 s** do **0.97 s** (15–25x szybciej, <1 s).
+  - `insert_bibliography()`: z **8–9 s** do **0.82 s** (10x szybciej, <1 s).
+- **Testy:** `pytest -q` (`188 passed`), `pytest -q -m com` (`3 passed`).
+- **Decyzje:** T16.
 
 ### Ciąg D: Kolekcje Zotero, cytowanie bez kursora, bibliografia i zwijane ustawienia (2026-11-28)
 - **Zakres:**

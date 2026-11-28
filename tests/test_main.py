@@ -140,10 +140,21 @@ def _is_powerpoint_running() -> bool:
     return "powerpnt.exe" in res.stdout.lower()
 
 
+def _ensure_powerpoint_not_running(timeout_seconds: float = 6.0) -> bool:
+    import time
+
+    start = time.time()
+    while time.time() - start < timeout_seconds:
+        if not _is_powerpoint_running():
+            return True
+        time.sleep(0.3)
+    return not _is_powerpoint_running()
+
+
 @pytest.mark.com
 def test_c1_window_drives_real_powerpoint_and_real_zotero_e2e(tk_root: tk.Tk) -> None:
     """Kompleksowy test końcowy C1: `AzpWindow` -> `CitationEngine` -> `ZoteroClient` + `PowerPointSlideDoc`."""
-    if _is_powerpoint_running():
+    if not _ensure_powerpoint_not_running():
         pytest.fail("PowerPoint jest uruchomiony! Zamknij PowerPointa przed testami COM.")
 
     from pathlib import Path
@@ -299,8 +310,10 @@ def test_c1_window_drives_real_powerpoint_and_real_zotero_e2e(tk_root: tk.Tk) ->
             win.destroy()
         slide1 = slide2 = box1 = box2 = footer_s1 = None
         if doc is not None:
+            doc.invalidate_cache()
             doc._presentation = None
             doc._app = None
+            doc = None
         for p_obj in (pres_b, pres_a):
             if p_obj is not None:
                 try:
