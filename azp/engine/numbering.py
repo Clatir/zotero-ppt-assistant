@@ -31,14 +31,39 @@ def is_numeric_style(style_id: str, styles: Sequence[StyleInfo] = ()) -> bool:
     return "ieee" in style_id.casefold()
 
 
+def collect_presentation_keys(slides: Sequence[SlideRecord]) -> tuple[str, ...]:
+    """Zbiera unikalne klucze ze wszystkich slajdów (z cytowań oraz istniejących stopek) w kolejności pierwszego wystąpienia (D28)."""
+    keys: list[str] = []
+    for slide in slides:
+        if slide.citations:
+            for citation in slide.citations:
+                for key in citation.keys:
+                    if key and key.strip():
+                        keys.append(key.strip())
+        else:
+            for entry in slide.footer_entries:
+                if entry.key and entry.key.strip():
+                    keys.append(entry.key.strip())
+    return tuple(dict.fromkeys(keys))
+
+
 def assign_global_numbers(slides: Sequence[SlideRecord]) -> dict[str, int]:
-    """Przypisuje numery `1..K` unikalnym kluczom w kolejności pierwszego wystąpienia w prezentacji (D4)."""
+    """Przypisuje numery `1..K` unikalnym kluczom w kolejności pierwszego wystąpienia w prezentacji (D4, D28)."""
     number_map: dict[str, int] = {}
     for slide in slides:
-        for citation in slide.citations:
-            for key in citation.keys:
-                if key not in number_map:
-                    number_map[key] = len(number_map) + 1
+        if slide.citations:
+            for citation in slide.citations:
+                for key in citation.keys:
+                    if key and key.strip():
+                        clean_key = key.strip()
+                        if clean_key not in number_map:
+                            number_map[clean_key] = len(number_map) + 1
+        else:
+            for entry in slide.footer_entries:
+                if entry.key and entry.key.strip():
+                    clean_key = entry.key.strip()
+                    if clean_key not in number_map:
+                        number_map[clean_key] = len(number_map) + 1
     return number_map
 
 
@@ -172,11 +197,34 @@ def compute_presentation_plan(
 
     planned_slides: list[SlideRecord] = []
     for slide in slides:
+        footer_only_fallback: tuple[Citation, ...] = ()
+        if not slide.citations and slide.footer_entries:
+            footer_keys = tuple(
+                dict.fromkeys(
+                    e.key.strip()
+                    for e in slide.footer_entries
+                    if e.key and e.key.strip()
+                )
+            )
+            if footer_keys:
+                footer_only_fallback = (
+                    Citation(
+                        citation_id=f"footer-only-{slide.slide_index}",
+                        keys=footer_keys,
+                        text="",
+                        in_text=False,
+                    ),
+                )
+
+        citations_for_numbering = (
+            slide.citations if slide.citations else footer_only_fallback
+        )
+
         if numeric:
             slide_map: Mapping[str, int] | None = (
                 global_map
                 if global_map is not None
-                else assign_slide_numbers(slide.citations)
+                else assign_slide_numbers(citations_for_numbering)
             )
         else:
             slide_map = None
@@ -199,8 +247,11 @@ def compute_presentation_plan(
             )
             for cit in slide.citations
         )
+        effective_citations_for_footer = (
+            planned_citations if planned_citations else footer_only_fallback
+        )
         planned_footer = build_slide_footer_entries(
-            planned_citations,
+            effective_citations_for_footer,
             refs,
             is_numeric=numeric,
             number_map=slide_map,
@@ -223,19 +274,21 @@ def build_presentation_bibliography_entries(
     refs: Mapping[str, FormattedRef],
     settings: Settings,
     styles: Sequence[StyleInfo] = (),
+    extra_keys: Sequence[str] = (),
 ) -> tuple[FooterEntry, ...]:
-    """Buduje pełny spis wykorzystanych źródeł (bibliografię) z całej prezentacji (D27).
+    """Buduje pełny spis wykorzystanych źródeł (bibliografię) z całej prezentacji (D27, D28).
 
-    - Zbiera wszystkie unikalne klucze cytowań ze wszystkich slajdów w kolejności pierwszego wystąpienia.
+    - Zbiera wszystkie unikalne klucze cytowań i stopek ze wszystkich slajdów (oraz opcjonalne `extra_keys`)
+      w kolejności pierwszego wystąpienia.
     - Dla stylu numerycznego (IEEE v4): używa globalnej numeracji `1..K` i sortuje rosnąco po numerze.
     - Dla stylu autor-rok (APA 7): sortuje alfabetycznie bez prefiksu `[n]`.
     """
     unique_keys = list(
         dict.fromkeys(
-            key
-            for slide in slides
-            for citation in slide.citations
-            for key in citation.keys
+            (
+                *collect_presentation_keys(slides),
+                *(k.strip() for k in extra_keys if isinstance(k, str) and k.strip()),
+            )
         )
     )
     if not unique_keys:
@@ -244,6 +297,9 @@ def build_presentation_bibliography_entries(
     numeric = is_numeric_style(settings.style_id, styles)
     if numeric:
         global_map = assign_global_numbers(slides)
+        for key in unique_keys:
+            if key not in global_map:
+                global_map[key] = len(global_map) + 1
         ordered_keys = sorted(unique_keys, key=lambda key: global_map[key])
         return tuple(
             FooterEntry(

@@ -1070,3 +1070,118 @@ def test_bibliography_settings_rollback_on_unsaved_d18_and_sync_on_switch_d19_m3
         assert win_multi.bib_columns_var.get() == "3"
     finally:
         win_multi.destroy()
+
+
+# ---------------------------------------------------------------------------
+# D3: Zwijana sekcja ustawień (D29) i wstawianie bibliografii z zaznaczonych pozycji / kolekcji (D28)
+# ---------------------------------------------------------------------------
+
+
+def test_collapsible_settings_panel_default_toggle_and_config_persistence_d29(
+    tk_root: tk.Tk, tmp_path: Path
+) -> None:
+    from azp.config import load_config
+    from azp.gui import HIDE_SETTINGS_LABEL, SHOW_SETTINGS_LABEL
+
+    cfg_path = tmp_path / "config.json"
+    doc = FakeSlideDoc()
+    win = AzpWindow(
+        zotero=FakeZoteroSource(),
+        slide_doc=doc,
+        master=tk_root,
+        poll_interval_ms=None,
+        config_path=cfg_path,
+    )
+    try:
+        # Domyślnie sekcja ustawień jest zwinięta (ukryta)
+        assert win.is_settings_expanded() is False
+        assert win.controller.settings.settings_expanded is False
+        assert win.toggle_settings_button.cget("text") == SHOW_SETTINGS_LABEL
+        assert win._settings_frame.winfo_manager() == ""
+
+        # Kliknięcie przycisku rozwija sekcję ustawień i zapisuje w config.json bez przebudowy prezentacji
+        win.toggle_settings_button.invoke()
+        win.update_idletasks()
+        assert win.is_settings_expanded() is True
+        assert win.controller.settings.settings_expanded is True
+        assert win.toggle_settings_button.cget("text") == HIDE_SETTINGS_LABEL
+        assert win._settings_frame.winfo_manager() == "grid"
+        assert "Rozwinięto ustawienia" in win.get_status_message()
+        assert doc.backups_created == []
+        assert load_config(cfg_path).settings_expanded is True
+
+        # Ponowne kliknięcie zwija sekcję ustawień
+        win.toggle_settings_button.invoke()
+        win.update_idletasks()
+        assert win.is_settings_expanded() is False
+        assert win.controller.settings.settings_expanded is False
+        assert win.toggle_settings_button.cget("text") == SHOW_SETTINGS_LABEL
+        assert win._settings_frame.winfo_manager() == ""
+        assert "Ukryto ustawienia" in win.get_status_message()
+        assert doc.backups_created == []
+        assert load_config(cfg_path).settings_expanded is False
+
+        # Programowe przełączenie set_settings_expanded(True)
+        win.set_settings_expanded(True)
+        assert win.is_settings_expanded() is True
+        assert load_config(cfg_path).settings_expanded is True
+    finally:
+        win.destroy()
+
+    # Nowe okienko odtwarza stan rozwinięcia z config.json, nawet gdy prezentacja ma zapisane settings_expanded=False
+    doc_with_tags = FakeSlideDoc()
+    doc_with_tags.save_settings(Settings(settings_expanded=False))
+    win2 = AzpWindow(
+        zotero=FakeZoteroSource(),
+        slide_doc=doc_with_tags,
+        master=tk_root,
+        poll_interval_ms=None,
+        config_path=cfg_path,
+    )
+    try:
+        assert win2.is_settings_expanded() is True
+        assert win2._settings_frame.winfo_manager() == "grid"
+    finally:
+        win2.destroy()
+
+
+def test_insert_bibliography_from_selected_results_or_collection_on_clean_presentation_d28(
+    tk_root: tk.Tk,
+) -> None:
+    # 1. Czysta prezentacja bez cytowań + zaznaczone pozycje na liście wyników -> wstawia bibliografię
+    doc1 = FakeSlideDoc(slide_count=2, active_slide_index=2, has_cursor=False)
+    win1, _zot1, doc1 = _make_window(tk_root=tk_root, doc=doc1)
+    try:
+        win1.select_result_keys(["KOWAL2023", "DOVE2013"])
+        win1.bibliography_button.invoke()
+        win1.update_idletasks()
+
+        assert "Wstawiono bibliografię (2 źródeł)" in win1.get_status_message()
+        entries = doc1.get_slide_bibliography_entries(2)
+        assert [e.key for e in entries] == ["KOWAL2023", "DOVE2013"]
+        assert [e.prefix for e in entries] == ["[1] ", "[2] "]
+
+        # Zmiana liczby kolumn i stylu na APA zachowuje tę bibliografię
+        assert win1.set_bib_columns(2) is True
+        assert len(doc1.get_slide_bibliography_columns(2)) == 2
+        assert win1.set_style(STYLE_APA) is True
+        assert [e.key for e in doc1.get_slide_bibliography_entries(2)] == [
+            "DOVE2013",
+            "KOWAL2023",
+        ]
+    finally:
+        win1.destroy()
+
+    # 2. Czysta prezentacja bez cytowań i bez zaznaczenia, ale z wybraną kolekcją Zotero -> wstawia pozycje z kolekcji
+    doc2 = FakeSlideDoc(slide_count=1, active_slide_index=1, has_cursor=False)
+    win2, _zot2, doc2 = _make_window(tk_root=tk_root, doc=doc2)
+    try:
+        win2.set_collection("COL_ETH")
+        assert win2.get_selected_keys() == ()
+        assert win2.insert_bibliography() is True
+        assert [e.key for e in doc2.get_slide_bibliography_entries(1)] == [
+            "KOWAL2023",
+            "DOVE2013",
+        ]
+    finally:
+        win2.destroy()

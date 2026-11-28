@@ -229,6 +229,22 @@ class MockSlide:
             self._pres._slides.remove(self)
             self._pres._reindex_slides()
 
+    def Duplicate(self) -> MockSlide:
+        next_id = (
+            max((s.SlideID for s in self._pres._slides), default=self.SlideID) + 1
+            if self._pres is not None
+            else self.SlideID + 1
+        )
+        new_slide = MockSlide([], slide_id=next_id)
+        for k, v in self.Tags._d.items():
+            new_slide.Tags.Add(k, v)
+        new_slide._pres = self._pres
+        if self._pres is not None and self in self._pres._slides:
+            idx = self._pres._slides.index(self)
+            self._pres._slides.insert(idx + 1, new_slide)
+            self._pres._reindex_slides()
+        return new_slide
+
 
 class _MockSlides:
     def __init__(self, slides: list[MockSlide], pres: MockPresentation | None = None) -> None:

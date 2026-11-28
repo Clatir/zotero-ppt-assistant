@@ -35,7 +35,13 @@ from azp.engine import CitationEngine
 
 CiteCallback = Callable[[tuple[str, ...], Settings], str | None]
 RebuildCallback = Callable[[Settings], str | None]
-BibliographyCallback = Callable[[Settings], str | None]
+BibliographyCallback = Callable[..., str | None]
+
+SHOW_SETTINGS_LABEL = "▸ Pokaż ustawienia"
+HIDE_SETTINGS_LABEL = "▾ Ukryj ustawienia"
+COMPACT_WINDOW_GEOMETRY = "430x440"
+COMPACT_MIN_HEIGHT = 380
+EXPANDED_MIN_HEIGHT = 760
 
 NUMBERING_LABELS: dict[NumberingMode, str] = {
     "global": "Globalna (cała prezentacja)",
@@ -185,6 +191,7 @@ class AzpController:
                         loaded,
                         always_on_top=base_settings.always_on_top,
                         dark_mode=base_settings.dark_mode,
+                        settings_expanded=base_settings.settings_expanded,
                     )
                 else:
                     self.settings = loaded
@@ -236,11 +243,13 @@ class AzpController:
 
         current_topmost = self.settings.always_on_top
         current_dark_mode = self.settings.dark_mode
+        current_expanded = self.settings.settings_expanded
         if loaded is not None:
             self.settings = replace(
                 loaded,
                 always_on_top=current_topmost,
                 dark_mode=current_dark_mode,
+                settings_expanded=current_expanded,
             )
 
         label = Path(current_key).name or current_key
@@ -368,8 +377,8 @@ class AzpController:
         self.status_message = msg or "Wstawiono cytowanie."
         return True
 
-    def insert_bibliography(self) -> bool:
-        """Wstawia lub aktualizuje spis wykorzystanych źródeł na aktywnym slajdzie (D27)."""
+    def insert_bibliography(self, selected_keys: Sequence[str] = ()) -> bool:
+        """Wstawia lub aktualizuje spis wykorzystanych źródeł na aktywnym slajdzie (D27, D28)."""
         self.sync_with_active_presentation()
         try:
             if not self.slide_doc.has_open_presentation():
@@ -387,13 +396,26 @@ class AzpController:
             self.status_message = f"PowerPoint zgłosił błąd: {_describe_unexpected_error(exc)}"
             return False
 
+        fallback_keys = tuple(
+            dict.fromkeys(
+                k.strip() for k in selected_keys if isinstance(k, str) and k.strip()
+            )
+        )
+        if not fallback_keys and self.selected_collection_key is not None:
+            fallback_keys = tuple(
+                dict.fromkeys(item.key for item in self.results if item.key)
+            )
+
         callback = (
             self.on_bibliography
             if self.on_bibliography is not None
             else self._builtin_on_bibliography
         )
         try:
-            msg = callback(self.settings)
+            try:
+                msg = callback(self.settings, fallback_keys)
+            except TypeError:
+                msg = callback(self.settings)
         except ZoteroOfflineError as exc:
             self.status_message = _format_zotero_offline_message(exc)
             return False
@@ -529,8 +551,8 @@ class AzpWindow:
             self.root = tk.Toplevel(master)
 
         self.root.title("Asystent Zotero dla PowerPointa")
-        self.root.geometry("430x760")
-        self.root.minsize(380, 640)
+        self.root.geometry(COMPACT_WINDOW_GEOMETRY)
+        self.root.minsize(380, COMPACT_MIN_HEIGHT)
 
         self._style_title_to_id: dict[str, str] = {}
         self._style_id_to_title: dict[str, str] = {}
@@ -543,6 +565,7 @@ class AzpWindow:
         self._ttk_style = ttk.Style(self.root)
         self._default_ttk_theme = self._ttk_style.theme_use()
         self._applied_dark_mode: bool | None = None
+        self._settings_expanded: bool = False
         self._build_variables()
         self._build_ui()
         self._sync_widgets_from_settings()
@@ -694,6 +717,16 @@ class AzpWindow:
         )
         self.bibliography_button.grid(
             row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0)
+        )
+
+        self.toggle_settings_button = ttk.Button(
+            actions_frame,
+            text=SHOW_SETTINGS_LABEL,
+            command=self.toggle_settings_panel,
+            style="Azp.TButton",
+        )
+        self.toggle_settings_button.grid(
+            row=2, column=0, columnspan=2, sticky="ew", pady=(4, 0)
         )
 
         # 4. Ustawienia (D2–D5, D9, D14, D27)
@@ -849,7 +882,35 @@ class AzpWindow:
             style="AzpStatus.TLabel",
         )
         self.status_label.grid(row=5, column=0, sticky="ew")
+        self._apply_settings_expanded(self.controller.settings.settings_expanded)
         self._bind_shortcuts()
+
+    def _apply_settings_expanded(self, expanded: bool) -> None:
+        is_exp = bool(expanded)
+        self._settings_expanded = is_exp
+        if is_exp:
+            self.toggle_settings_button.configure(text=HIDE_SETTINGS_LABEL)
+            self._settings_frame.grid()
+            try:
+                self.root.update_idletasks()
+                current_w = self.root.winfo_width()
+                width = current_w if current_w >= 380 else 430
+                target_h = max(EXPANDED_MIN_HEIGHT, int(self.root.winfo_reqheight()))
+                self.root.minsize(380, EXPANDED_MIN_HEIGHT)
+                self.root.geometry(f"{width}x{target_h}")
+            except tk.TclError:
+                pass
+        else:
+            self.toggle_settings_button.configure(text=SHOW_SETTINGS_LABEL)
+            self._settings_frame.grid_remove()
+            try:
+                self.root.update_idletasks()
+                current_w = self.root.winfo_width()
+                width = current_w if current_w >= 380 else 430
+                self.root.minsize(380, COMPACT_MIN_HEIGHT)
+                self.root.geometry(f"{width}x440")
+            except tk.TclError:
+                pass
 
     def _bind_shortcuts(self) -> None:
         """Rejestruje skróty klawiszowe wewnątrz okienka (D15)."""
@@ -924,6 +985,8 @@ class AzpWindow:
         self.dark_mode_var.set(s.dark_mode)
         if self._applied_dark_mode != s.dark_mode:
             self._apply_theme(s.dark_mode)
+        if self._settings_expanded != s.settings_expanded:
+            self._apply_settings_expanded(s.settings_expanded)
 
     def _schedule_presentation_poll(self) -> None:
         if self._poll_interval_ms is not None and self._poll_interval_ms > 0:
@@ -1290,12 +1353,33 @@ class AzpWindow:
         return ok
 
     def insert_bibliography(self) -> bool:
-        """Wstawia lub aktualizuje spis wykorzystanych źródeł na aktywnym slajdzie (D27)."""
+        """Wstawia lub aktualizuje spis wykorzystanych źródeł na aktywnym slajdzie (D27, D28)."""
         self.check_active_presentation()
-        ok = self.controller.insert_bibliography()
+        ok = self.controller.insert_bibliography(
+            selected_keys=self.get_selected_keys()
+        )
         self._sync_widgets_from_settings()
         self.status_var.set(self.controller.status_message)
         return ok
+
+    def is_settings_expanded(self) -> bool:
+        """Zwraca `True`, jeśli sekcja ustawień w okienku jest rozwinięta (D29)."""
+        return bool(self._settings_expanded)
+
+    def set_settings_expanded(self, expanded: bool) -> None:
+        """Rozwija lub zwija sekcję ustawień w okienku i zapisuje stan bez przebudowy prezentacji (D29)."""
+        target = bool(expanded)
+        self._apply_settings_expanded(target)
+        self.controller.update_settings(rebuild=False, settings_expanded=target)
+        self.status_var.set(
+            "Rozwinięto ustawienia." if target else "Ukryto ustawienia."
+        )
+
+    def toggle_settings_panel(self) -> bool:
+        """Przełącza widoczność sekcji ustawień w okienku i zwraca nowy stan (D29)."""
+        new_state = not self.is_settings_expanded()
+        self.set_settings_expanded(new_state)
+        return new_state
 
     def refresh_presentation(self) -> bool:
         """Tworzy kopię zapasową i przebudowuje całą prezentację."""

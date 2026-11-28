@@ -81,9 +81,15 @@ def build_window(
         except Exception as exc:
             raise AzpError(f"PowerPoint zgłosił błąd: {describe_error(exc)}") from exc
 
-    def _on_bibliography(current_settings: Settings) -> str | None:
+    def _on_bibliography(
+        current_settings: Settings,
+        fallback_keys: Sequence[str] = (),
+    ) -> str | None:
         try:
-            return raw_on_bibliography(current_settings)
+            try:
+                return raw_on_bibliography(current_settings, fallback_keys)
+            except TypeError:
+                return raw_on_bibliography(current_settings)
         except AzpError:
             raise
         except Exception as exc:

@@ -207,6 +207,7 @@ class Settings:
     bib_font_size_pt: int = 12
     bib_fit_mode: BibFitMode = "shrink_to_fit"
     bib_columns: int = 1
+    settings_expanded: bool = False
 
     def __post_init__(self) -> None:
         if self.numbering_mode not in VALID_NUMBERING_MODES:
@@ -253,6 +254,10 @@ class Settings:
             raise ValueError(
                 f"Liczba kolumn bibliografii poza zakresem {VALID_BIB_COLUMNS}: {self.bib_columns!r}"
             )
+        if not isinstance(self.settings_expanded, bool):
+            raise ValueError(
+                f"Nieprawidłowa wartość settings_expanded: {self.settings_expanded!r}"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         """Serializuje ustawienia do słownika (do zapisu w Tags lub config.json)."""
@@ -269,6 +274,7 @@ class Settings:
             "bib_font_size_pt": self.bib_font_size_pt,
             "bib_fit_mode": self.bib_fit_mode,
             "bib_columns": self.bib_columns,
+            "settings_expanded": self.settings_expanded,
         }
 
     @classmethod
@@ -288,6 +294,7 @@ class Settings:
             bib_font_size_pt=data.get("bib_font_size_pt", defaults.bib_font_size_pt),
             bib_fit_mode=data.get("bib_fit_mode", defaults.bib_fit_mode),
             bib_columns=data.get("bib_columns", defaults.bib_columns),
+            settings_expanded=data.get("settings_expanded", defaults.settings_expanded),
         )
 
 

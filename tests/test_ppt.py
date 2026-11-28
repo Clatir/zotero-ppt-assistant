@@ -1516,6 +1516,235 @@ def test_set_slide_bibliography_on_continuation_slide_and_index_shift_h2() -> No
     assert doc.read_slides()[1].has_bibliography is True
 
 
+def test_get_active_slide_index_prefers_visible_slide_over_stale_thumbnail_and_reads_panes_d28() -> None:
+    """D28/T15: po przewinięciu widoku na slajd 2 (gdy miniatura slajdu 1 jest nadal zaznaczona)
+    get_active_slide_index zwraca widoczny slajd 2, także przez win.Panes (ppViewSlide = 1).
+    """
+    slide1 = MockSlide([MockShape("Body1", "Slajd 1")], slide_id=101)
+    slide2 = MockSlide([], slide_id=102)
+    pres = MockPresentation([slide1, slide2])
+
+    class _View2:
+        Slide = slide2
+
+    class _StaleSlideSelection:
+        Type = PP_SELECTION_SLIDES
+
+        def SlideRange(self, idx: int) -> MockSlide:
+            _ = idx
+            # Miniatura slajdu 1 pozostała zaznaczona na pasku bocznym
+            return slide1
+
+    class _WinScrolled:
+        Selection = _StaleSlideSelection()
+        View = _View2()
+
+    class _AppScrolled:
+        ActiveWindow = _WinScrolled()
+        ActivePresentation = pres
+
+        class Presentations:
+            Count = 1
+
+    doc = PowerPointSlideDoc(app=_AppScrolled(), presentation=pres)
+    assert doc.get_active_slide_index() == 2
+
+    # Przypadek 2: ActivePane to panel miniatur (ppViewThumbnails = 11), więc win.View.Slide rzuca wyjątek,
+    # a właściwy slajd 2 znajduje się w win.Panes w panelu o ViewType == 1 (ppViewSlide)
+    class _BrokenTopView:
+        @property
+        def Slide(self) -> MockSlide:
+            raise RuntimeError("View.Slide niedostępne w aktywnym panelu miniatur")
+
+    class _ThumbPane:
+        ViewType = 11
+        View = _BrokenTopView()
+
+    class _SlidePane:
+        ViewType = 1
+        View = _View2()
+
+    class _PanesCol:
+        Count = 2
+
+        def __call__(self, idx: int) -> object:
+            return (_ThumbPane(), _SlidePane())[idx - 1]
+
+    class _WinWithPanes:
+        Selection = _StaleSlideSelection()
+        View = _BrokenTopView()
+        Panes = _PanesCol()
+
+    class _AppWithPanes:
+        ActiveWindow = _WinWithPanes()
+        ActivePresentation = pres
+
+        class Presentations:
+            Count = 1
+
+    doc_panes = PowerPointSlideDoc(app=_AppWithPanes(), presentation=pres)
+    assert doc_panes.get_active_slide_index() == 2
+
+    # Przypadek 3 (M1): sel_type == PP_SELECTION_TEXT, ale ShapeRange, SlideRange i win.View.Slide rzucają wyjątek,
+    # więc get_active_slide_index przechodzi do win.Panes (ViewType == 1) i zwraca slajd 2
+    class _BrokenTextSelection:
+        Type = PP_SELECTION_TEXT
+
+        def ShapeRange(self, idx: int) -> MockShape:
+            raise RuntimeError("ShapeRange niedostępny")
+
+        def SlideRange(self, idx: int) -> MockSlide:
+            raise RuntimeError("SlideRange niedostępny")
+
+    class _WinTextInPanes:
+        Selection = _BrokenTextSelection()
+        View = _BrokenTopView()
+        Panes = _PanesCol()
+
+    class _AppTextInPanes:
+        ActiveWindow = _WinTextInPanes()
+        ActivePresentation = pres
+
+        class Presentations:
+            Count = 1
+
+    doc_text_panes = PowerPointSlideDoc(app=_AppTextInPanes(), presentation=pres)
+    assert doc_text_panes.get_active_slide_index() == 2
+
+
+def test_h1_manual_deletion_of_in_text_citation_clears_footer_and_frees_number_one() -> None:
+    """H1 / H1-R2: ręczne usunięcie jedynego cytowania [1] z tekstu slajdu 1 mającego stopkę
+    czyści stopkę i zwalnia [1] zarówno podczas cite() na kolejnym slajdzie, jak i podczas rebuild().
+    """
+    from azp.engine import CitationEngine
+    from tests.fakes.fake_zotero import FakeZoteroSource
+
+    # Scenariusz A (H1-R2): cite() na slajdzie 2 zaraz po ręcznym usunięciu "[1]" ze slajdu 1
+    sh1_a = MockShape("Body1", "Tekst slajdu 1")
+    sh2_a = MockShape("Body2", "Tekst slajdu 2")
+    slide1_a = MockSlide([sh1_a], slide_id=101)
+    slide2_a = MockSlide([sh2_a], slide_id=102)
+    pres_a = MockPresentation(
+        [slide1_a, slide2_a],
+        full_name="C:\\Prace\\TestH1A.pptx",
+        path="C:\\Prace",
+    )
+    doc_a = PowerPointSlideDoc(presentation=pres_a, active_slide_index=1)
+    zotero = FakeZoteroSource()
+    engine_a = CitationEngine(zotero, doc_a)
+
+    doc_a.set_cursor_target(1, "Body1", None)
+    engine_a.cite(["KOWAL2023"])
+    assert sh1_a.TextFrame.TextRange.Text == "Tekst slajdu 1 [1]"
+    assert doc_a._find_footer_shape(slide1_a) is not None
+
+    # Ręczne usunięcie "[1]" ze slajdu 1 i od razu cite() na slajdzie 2 (bez rebuild!)
+    sh1_a.TextFrame.TextRange.Text = "Tekst slajdu 1"
+    doc_a.set_cursor_target(2, "Body2", None)
+    s2_planned = engine_a.cite(["NOWAK2024"])
+    assert doc_a._find_footer_shape(slide1_a) is None
+    assert sh2_a.TextFrame.TextRange.Text == "Tekst slajdu 2 [1]"
+    assert [c.text for c in s2_planned.citations] == ["[1]"]
+    assert [e.prefix for e in s2_planned.footer_entries] == ["[1] "]
+    assert [e.key for e in s2_planned.footer_entries] == ["NOWAK2024"]
+
+    # Scenariusz B: rebuild() po ręcznym usunięciu "[1]" ze slajdu 1
+    sh1 = MockShape("Body1", "Tekst slajdu 1")
+    sh2 = MockShape("Body2", "Tekst slajdu 2")
+    slide1 = MockSlide([sh1], slide_id=101)
+    slide2 = MockSlide([sh2], slide_id=102)
+    pres = MockPresentation(
+        [slide1, slide2],
+        full_name="C:\\Prace\\TestH1.pptx",
+        path="C:\\Prace",
+    )
+    doc = PowerPointSlideDoc(presentation=pres, active_slide_index=1)
+    engine = CitationEngine(zotero, doc)
+
+    # Slajd 1: cytujemy KOWAL2023 -> [1] + stopka na slajdzie 1
+    doc.set_cursor_target(1, "Body1", None)
+    engine.cite(["KOWAL2023"])
+    assert sh1.TextFrame.TextRange.Text == "Tekst slajdu 1 [1]"
+    assert doc._find_footer_shape(slide1) is not None
+
+    # Slajd 2: cytujemy NOWAK2024 -> [2] + stopka na slajdzie 2
+    doc.set_cursor_target(2, "Body2", None)
+    engine.cite(["NOWAK2024"])
+    assert sh2.TextFrame.TextRange.Text == "Tekst slajdu 2 [2]"
+
+    # Użytkownik ręcznie usuwa "[1]" z tekstu slajdu 1 w PowerPoincie
+    sh1.TextFrame.TextRange.Text = "Tekst slajdu 1"
+
+    # Przebudowa prezentacji: stopka na slajdzie 1 znika, a NOWAK2024 na slajdzie 2 dostaje numer [1]
+    rebuilt = engine.rebuild()
+    assert rebuilt[0].citations == ()
+    assert rebuilt[0].footer_entries == ()
+    assert doc._find_footer_shape(slide1) is None
+    assert sh2.TextFrame.TextRange.Text == "Tekst slajdu 2 [1]"
+    assert [e.prefix for e in rebuilt[1].footer_entries] == ["[1] "]
+    assert [e.key for e in rebuilt[1].footer_entries] == ["NOWAK2024"]
+
+
+def test_get_slide_bibliography_keys_from_tag_and_continuation_slides_d28() -> None:
+    """D28/T15: get_slide_bibliography_keys odczytuje klucze z TAG_BIB_KEYS oraz ze slajdów kontynuacji."""
+    from azp.ppt import TAG_BIB_KEYS
+
+    slide1 = MockSlide([MockShape("Body1", "Slajd 1")], slide_id=101)
+    slide2 = MockSlide([], slide_id=102)
+    pres = MockPresentation([slide1, slide2])
+    doc = PowerPointSlideDoc(presentation=pres, active_slide_index=2)
+
+    many_entries = [
+        FooterEntry(
+            key=f"K{i}",
+            prefix=f"[{i}] ",
+            spans=(TextSpan("Obszerny wpis bibliograficzny w spisie literatury " * 4),),
+        )
+        for i in range(1, 10)
+    ]
+    expected_keys = tuple(f"K{i}" for i in range(1, 10))
+    settings_split = Settings(
+        bib_font_name="Calibri",
+        bib_font_size_pt=24,
+        bib_fit_mode="split_slides",
+        bib_columns=1,
+    )
+    used = doc.set_slide_bibliography(2, many_entries, settings_split)
+    assert used > 1
+    assert slide2.Tags(TAG_BIB_KEYS) != ""
+
+    # Odczyt zarówno z głównego slajdu (2), jak i ze slajdu kontynuacji (3)
+    assert doc.get_slide_bibliography_keys(2) == expected_keys
+    assert doc.get_slide_bibliography_keys(3) == expected_keys
+
+    # Fallback: gdy TAG_BIB_KEYS jest pusty, odczytuje klucze z kształtów na slajdzie głównym i kontynuacji
+    slide2.Tags.Delete(TAG_BIB_KEYS)
+    assert doc.get_slide_bibliography_keys(2) == expected_keys
+    assert doc.get_slide_bibliography_keys(3) == expected_keys
+
+    # Wyczyszczenie bibliografii czyści również TAG_BIB_KEYS
+    doc.set_slide_bibliography(2, [], settings_split)
+    assert slide2.Tags(TAG_BIB_KEYS) == ""
+    assert doc.get_slide_bibliography_keys(2) == ()
+
+    # M2: gdy _insert_blank_continuation_slide używa fallbacku Duplicate(),
+    # skopiowany slajd kontynuacji ma wyczyszczony TAG_BIB_KEYS
+    orig_add = pres.Slides.__class__.Add
+    try:
+        def _fail_add(self_slides: object, index: int, layout: int = 12) -> MockSlide:
+            raise RuntimeError("Slides.Add disabled to force Duplicate fallback")
+
+        pres.Slides.__class__.Add = _fail_add  # type: ignore[method-assign]
+        used_dup = doc.set_slide_bibliography(2, many_entries, settings_split)
+        assert used_dup > 1
+        assert pres.Slides(2).Tags(TAG_BIB_KEYS) != ""
+        for cont_idx in range(3, pres.Slides.Count + 1):
+            assert pres.Slides(cont_idx).Tags(TAG_BIB_CONTINUATION) == "1"
+            assert pres.Slides(cont_idx).Tags(TAG_BIB_KEYS) == ""
+    finally:
+        pres.Slides.__class__.Add = orig_add  # type: ignore[method-assign]
+
+
 # ---------------------------------------------------------------------------
 # Testy integracyjne COM (@pytest.mark.com)
 # ---------------------------------------------------------------------------

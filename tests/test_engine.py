@@ -986,3 +986,151 @@ def test_footer_citation_then_in_text_citation_on_same_slide_order_consistency_d
     assert doc.update_calls == 0
     assert [e.key for e in s1_both.footer_entries] == ["NOWAK2024", "KOWAL2023"]
     assert [e.prefix for e in s1_both.footer_entries] == ["[1] ", "[2] "]
+
+
+# ---------------------------------------------------------------------------
+# D3: Naprawa bibliografii (źródła ze stopek, zaznaczone pozycje fallback_keys,
+# zachowanie samodzielnej bibliografii podczas przebudowy – D28, T15)
+# ---------------------------------------------------------------------------
+
+
+def test_collect_presentation_keys_and_bibliography_from_footer_entries_d28() -> None:
+    from azp.contracts import FooterEntry
+    from azp.engine import collect_presentation_keys
+
+    zotero = FakeZoteroSource()
+    all_keys = ("KOWAL2023", "NOWAK2024", "DOVE2013")
+    ieee_refs = zotero.get_formatted_refs(all_keys, STYLE_IEEE_V4)
+    apa_refs = zotero.get_formatted_refs(all_keys, STYLE_APA)
+
+    # Slajd 1 ma puste citations, ale posiada już stopkę footer_entries
+    slides = [
+        SlideRecord(
+            slide_index=1,
+            slide_id=101,
+            citations=(),
+            footer_entries=(
+                FooterEntry(key="KOWAL2023", prefix="[1] ", spans=(TextSpan("Kowalski"),)),
+                FooterEntry(key="NOWAK2024", prefix="[2] ", spans=(TextSpan("Nowak"),)),
+            ),
+        ),
+        SlideRecord(
+            slide_index=2,
+            slide_id=102,
+            citations=(
+                Citation(citation_id="c1", keys=("NOWAK2024", "DOVE2013"), text="[2, 3]"),
+            ),
+        ),
+    ]
+
+    assert collect_presentation_keys(slides) == ("KOWAL2023", "NOWAK2024", "DOVE2013")
+    assert assign_global_numbers(slides) == {
+        "KOWAL2023": 1,
+        "NOWAK2024": 2,
+        "DOVE2013": 3,
+    }
+
+    bib_ieee = build_presentation_bibliography_entries(
+        slides,
+        ieee_refs,
+        Settings(style_id=STYLE_IEEE_V4),
+    )
+    assert [e.key for e in bib_ieee] == ["KOWAL2023", "NOWAK2024", "DOVE2013"]
+    assert [e.prefix for e in bib_ieee] == ["[1] ", "[2] ", "[3] "]
+
+    bib_apa = build_presentation_bibliography_entries(
+        slides,
+        apa_refs,
+        Settings(style_id=STYLE_APA),
+    )
+    assert [e.key for e in bib_apa] == ["DOVE2013", "KOWAL2023", "NOWAK2024"]
+
+    # H1: compute_presentation_plan oraz engine.rebuild() zachowują i przeformatowują
+    # samodzielną stopkę (gdy slide.citations == ()), zamiast kasować ją do ()
+    plan_apa = compute_presentation_plan(
+        slides,
+        apa_refs,
+        Settings(style_id=STYLE_APA),
+    )
+    assert plan_apa[0].citations == ()
+    assert [e.key for e in plan_apa[0].footer_entries] == ["KOWAL2023", "NOWAK2024"]
+    assert all(e.prefix == "" for e in plan_apa[0].footer_entries)
+
+    plan_per_slide = compute_presentation_plan(
+        slides,
+        ieee_refs,
+        Settings(style_id=STYLE_IEEE_V4, numbering_mode="per_slide"),
+    )
+    assert [e.prefix for e in plan_per_slide[0].footer_entries] == ["[1] ", "[2] "]
+    assert [e.prefix for e in plan_per_slide[1].footer_entries] == ["[1] ", "[2] "]
+
+    doc = FakeSlideDoc(slide_count=1, active_slide_index=1, has_cursor=False)
+    doc.set_slide_footer(
+        1,
+        [
+            FooterEntry(key="NOWAK2024", prefix="[1] ", spans=(TextSpan("Nowak"),)),
+            FooterEntry(key="KOWAL2023", prefix="[2] ", spans=(TextSpan("Kowalski"),)),
+        ],
+        Settings(style_id=STYLE_IEEE_V4),
+    )
+    engine = CitationEngine(zotero, doc)
+    rebuilt = engine.rebuild(Settings(style_id=STYLE_APA))
+    assert [e.key for e in rebuilt[0].footer_entries] == ["KOWAL2023", "NOWAK2024"]
+    assert all(e.prefix == "" for e in rebuilt[0].footer_entries)
+
+
+def test_insert_bibliography_with_fallback_keys_and_rebuild_preservation_d28() -> None:
+    zotero = FakeZoteroSource()
+    doc = FakeSlideDoc(slide_count=2, active_slide_index=2, has_cursor=False)
+    engine = CitationEngine(zotero, doc)
+
+    # Prezentacja nie ma żadnych cytowań na slajdach, ale użytkownik zaznaczył pozycje na liście (fallback_keys)
+    on_bib = engine.make_bibliography_callback()
+    msg = on_bib(
+        Settings(style_id=STYLE_IEEE_V4, bib_columns=1),
+        ("NOWAK2024", "KOWAL2023", "DOVE2013"),
+    )
+    assert msg == "Wstawiono bibliografię (3 źródeł) na slajdzie."
+    assert doc.read_slides()[1].has_bibliography is True
+    assert [e.key for e in doc.get_slide_bibliography_entries(2)] == [
+        "NOWAK2024",
+        "KOWAL2023",
+        "DOVE2013",
+    ]
+    assert [e.prefix for e in doc.get_slide_bibliography_entries(2)] == [
+        "[1] ",
+        "[2] ",
+        "[3] ",
+    ]
+
+    # Zmiana liczby kolumn bibliografii i rozmiaru czcionki (apply_settings / rebuild)
+    # nie może usunąć samodzielnej bibliografii na prezentacji bez cytowań!
+    s_2col_apa = Settings(
+        style_id=STYLE_APA,
+        bib_font_name="Arial",
+        bib_font_size_pt=14,
+        bib_columns=2,
+    )
+    engine.apply_settings(s_2col_apa)
+    assert doc.read_slides()[1].has_bibliography is True
+    assert [e.key for e in doc.get_slide_bibliography_entries(2)] == [
+        "DOVE2013",
+        "KOWAL2023",
+        "NOWAK2024",
+    ]
+    assert all(e.prefix == "" for e in doc.get_slide_bibliography_entries(2))
+    assert len(doc.get_slide_bibliography_columns(2)) == 2
+    assert doc.get_slide_bibliography_settings(2) == s_2col_apa
+
+    # Ponowne kliknięcie "Wstaw bibliografię" na tym samym slajdzie bez zaznaczenia odświeża istniejącą bibliografię
+    count, slides_used = engine.insert_bibliography(
+        settings=replace(s_2col_apa, style_id=STYLE_IEEE_V4, bib_columns=3),
+        fallback_keys=(),
+    )
+    assert (count, slides_used) == (3, 1)
+    assert len(doc.get_slide_bibliography_columns(2)) == 3
+    assert [e.prefix for e in doc.get_slide_bibliography_entries(2)] == [
+        "[1] ",
+        "[2] ",
+        "[3] ",
+    ]

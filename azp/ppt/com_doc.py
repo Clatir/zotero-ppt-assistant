@@ -36,6 +36,7 @@ PP_AUTOSIZE_SHAPE_TO_FIT_TEXT = 1
 MSO_TEXT_ORIENTATION_HORIZONTAL = 1
 MSO_TRUE = -1
 MSO_FALSE = 0
+MSO_BRING_TO_FRONT = 0
 
 # Klucze tagów AZP w prezentacji, slajdach i kształtach (T3, T14)
 TAG_SETTINGS = "AZP_SETTINGS"
@@ -47,6 +48,7 @@ TAG_FOOTER_ENTRIES = "AZP_FOOTER_ENTRIES"
 TAG_HIDDEN_NATIVE_FOOTER = "AZP_HIDDEN_NATIVE_FOOTER"
 TAG_BIB_COLUMN = "AZP_BIB_COLUMN"
 TAG_BIB_CONTINUATION = "AZP_BIB_CONTINUATION"
+TAG_BIB_KEYS = "AZP_BIB_KEYS"
 
 FOOTER_HEADER_TEXT = "Źródła:"
 FOOTER_MARGIN_X_PT = 36.0
@@ -1270,17 +1272,33 @@ class PowerPointSlideDoc:
             )
 
         app = self._get_app()
+        windows: list[Any] = []
         if app is not None:
             try:
                 win = app.ActiveWindow
+                if win is not None:
+                    windows.append(win)
             except Exception:
-                win = None
-            if win is not None:
+                pass
+        try:
+            pres_win = pres.Windows(1)
+            if pres_win is not None and not any(w is pres_win for w in windows):
+                windows.append(pres_win)
+        except Exception:
+            pass
+
+        for win in windows:
+            try:
+                sel_type = int(win.Selection.Type)
+            except Exception:
+                sel_type = PP_SELECTION_NONE
+
+            if sel_type in (PP_SELECTION_TEXT, PP_SELECTION_SHAPES):
                 for getter in (
-                    lambda: int(win.Selection.SlideRange(1).SlideIndex),
-                    lambda: int(win.Selection.SlideRange.SlideIndex),
-                    lambda: int(win.Selection.ShapeRange(1).Parent.SlideIndex),
-                    lambda: int(win.View.Slide.SlideIndex),
+                    lambda w=win: int(w.Selection.ShapeRange(1).Parent.SlideIndex),
+                    lambda w=win: int(w.View.Slide.SlideIndex),
+                    lambda w=win: int(w.Selection.SlideRange(1).SlideIndex),
+                    lambda w=win: int(w.Selection.SlideRange.SlideIndex),
                 ):
                     try:
                         idx = getter()
@@ -1288,6 +1306,61 @@ class PowerPointSlideDoc:
                             return idx
                     except Exception:
                         continue
+
+            try:
+                idx = int(win.View.Slide.SlideIndex)
+                if 1 <= idx <= slide_count:
+                    return idx
+            except Exception:
+                pass
+
+            panes_list: list[Any] = []
+            try:
+                panes_obj = win.Panes
+                if panes_obj is not None:
+                    try:
+                        p_count = int(panes_obj.Count)
+                        for p_idx in range(1, p_count + 1):
+                            try:
+                                panes_list.append(panes_obj(p_idx))
+                            except Exception:
+                                pass
+                    except Exception:
+                        for p in panes_obj:
+                            panes_list.append(p)
+            except Exception:
+                panes_list = []
+
+            slide_panes: list[Any] = []
+            other_panes: list[Any] = []
+            for pane in panes_list:
+                try:
+                    if int(pane.ViewType) == 1:
+                        slide_panes.append(pane)
+                    else:
+                        other_panes.append(pane)
+                except Exception:
+                    other_panes.append(pane)
+
+            for pane in (*slide_panes, *other_panes):
+                try:
+                    idx = int(pane.View.Slide.SlideIndex)
+                    if 1 <= idx <= slide_count:
+                        return idx
+                except Exception:
+                    continue
+
+            for getter in (
+                lambda w=win: int(w.Selection.SlideRange(1).SlideIndex),
+                lambda w=win: int(w.Selection.SlideRange.SlideIndex),
+                lambda w=win: int(w.Selection.ShapeRange(1).Parent.SlideIndex),
+            ):
+                try:
+                    idx = getter()
+                    if 1 <= idx <= slide_count:
+                        return idx
+                except Exception:
+                    continue
 
         raise NoActiveSlideError("Brak aktywnego slajdu w PowerPoincie.")
 
@@ -1644,11 +1717,14 @@ class PowerPointSlideDoc:
 
         for char_range in ranges:
             if char_range.length > 0 and (char_range.italic or char_range.bold):
-                sub = tr.Characters(char_range.start, char_range.length)
-                if char_range.italic:
-                    sub.Font.Italic = MSO_TRUE
-                if char_range.bold:
-                    sub.Font.Bold = MSO_TRUE
+                try:
+                    sub = tr.Characters(char_range.start, char_range.length)
+                    if char_range.italic:
+                        sub.Font.Italic = MSO_TRUE
+                    if char_range.bold:
+                        sub.Font.Bold = MSO_TRUE
+                except Exception:
+                    pass
 
         tf.AutoSize = PP_AUTOSIZE_SHAPE_TO_FIT_TEXT
         tf.WordWrap = MSO_TRUE
@@ -1662,6 +1738,14 @@ class PowerPointSlideDoc:
             height=actual_height,
         )
         shape.Top = adjusted_geom.top
+        try:
+            shape.Visible = MSO_TRUE
+        except Exception:
+            pass
+        try:
+            shape.ZOrder(MSO_BRING_TO_FRONT)
+        except Exception:
+            pass
 
         _set_tag(shape, TAG_FOOTER_ENTRIES, serialize_footer_entries(entries))
         self._restore_last_insert_cursor(only_slide_index=slide_index)
@@ -1806,17 +1890,28 @@ class PowerPointSlideDoc:
 
             for char_range in ranges:
                 if char_range.length > 0 and (char_range.italic or char_range.bold):
-                    sub = tr.Characters(char_range.start, char_range.length)
-                    if char_range.italic:
-                        sub.Font.Italic = MSO_TRUE
-                    if char_range.bold:
-                        sub.Font.Bold = MSO_TRUE
+                    try:
+                        sub = tr.Characters(char_range.start, char_range.length)
+                        if char_range.italic:
+                            sub.Font.Italic = MSO_TRUE
+                        if char_range.bold:
+                            sub.Font.Bold = MSO_TRUE
+                    except Exception:
+                        pass
 
             tf.AutoSize = PP_AUTOSIZE_SHAPE_TO_FIT_TEXT
             tf.WordWrap = MSO_TRUE
             shape.Left = geom.left
             shape.Width = geom.width
             shape.Top = geom.top
+            try:
+                shape.Visible = MSO_TRUE
+            except Exception:
+                pass
+            try:
+                shape.ZOrder(MSO_BRING_TO_FRONT)
+            except Exception:
+                pass
             created_shapes.append((shape, geom))
 
         if settings.bib_fit_mode == "shrink_to_fit" and created_shapes:
@@ -1858,12 +1953,19 @@ class PowerPointSlideDoc:
         self._remove_bibliography_shapes(slide)
 
         if not entries:
+            _set_tag(slide, TAG_BIB_KEYS, "")
             self._update_tracked_slide_indices_after_bib_change(
                 base_slide_index=slide_index,
                 removed_count=removed_count,
                 added_count=0,
             )
             return 0
+
+        _set_tag(
+            slide,
+            TAG_BIB_KEYS,
+            json.dumps([e.key for e in entries if e.key], ensure_ascii=False),
+        )
 
         try:
             slide_width = float(pres.PageSetup.SlideWidth)
@@ -1909,6 +2011,7 @@ class PowerPointSlideDoc:
                 slide_index + offset,
             )
             _set_tag(cont_slide, TAG_CITATIONS, "")
+            _set_tag(cont_slide, TAG_BIB_KEYS, "")
             _set_tag(cont_slide, TAG_BIB_CONTINUATION, "1")
             self._render_bibliography_on_single_slide(
                 slide=cont_slide,
@@ -1925,7 +2028,57 @@ class PowerPointSlideDoc:
             removed_count=removed_count,
             added_count=added_count,
         )
+        if self._cursor_target is None:
+            app = self._get_app()
+            if app is not None:
+                try:
+                    app.ActiveWindow.View.GotoSlide(slide_index)
+                except Exception:
+                    pass
         return len(slide_chunks)
+
+    def get_slide_bibliography_keys(self, slide_index: int) -> tuple[str, ...]:
+        """Zwraca klucze pozycji bibliografii zapisane na slajdzie (wraz ze slajdami kontynuacji – D28)."""
+        pres = self._get_presentation()
+        if pres is None:
+            return ()
+        slide = self._get_slide_com(slide_index)
+        while slide_index > 1 and _get_tag(slide, TAG_BIB_CONTINUATION) == "1":
+            slide_index -= 1
+            slide = self._get_slide_com(slide_index)
+
+        keys: list[str] = []
+        raw_bib_keys = _get_tag(slide, TAG_BIB_KEYS)
+        if raw_bib_keys and raw_bib_keys.strip():
+            try:
+                parsed = json.loads(raw_bib_keys)
+                if isinstance(parsed, list):
+                    keys.extend(
+                        str(k).strip()
+                        for k in parsed
+                        if isinstance(k, str) and str(k).strip()
+                    )
+            except (ValueError, TypeError):
+                pass
+
+        if not keys:
+            for sh in self._find_bibliography_shapes(slide):
+                for entry in deserialize_footer_entries(_get_tag(sh, TAG_FOOTER_ENTRIES)):
+                    if entry.key and entry.key.strip():
+                        keys.append(entry.key.strip())
+            next_idx = slide_index + 1
+            slide_count = int(pres.Slides.Count)
+            while next_idx <= slide_count:
+                next_slide = pres.Slides(next_idx)
+                if _get_tag(next_slide, TAG_BIB_CONTINUATION) != "1":
+                    break
+                for sh in self._find_bibliography_shapes(next_slide):
+                    for entry in deserialize_footer_entries(_get_tag(sh, TAG_FOOTER_ENTRIES)):
+                        if entry.key and entry.key.strip():
+                            keys.append(entry.key.strip())
+                next_idx += 1
+
+        return tuple(dict.fromkeys(k for k in keys if isinstance(k, str) and k.strip()))
 
     def read_slides(self) -> list[SlideRecord]:
         """Odczytuje wszystkie slajdy w kolejności od 1 do N wraz z ich cytowaniami, stopkami i bibliografią."""
@@ -1938,17 +2091,39 @@ class PowerPointSlideDoc:
         for idx in range(1, slide_count + 1):
             slide = pres.Slides(idx)
             slide_id = int(slide.SlideID)
+            body_shapes = self._list_body_text_shapes(slide)
+            had_raw_in_text = any(
+                c.in_text for c in deserialize_citations(_get_tag(slide, TAG_CITATIONS))
+            ) or any(
+                c.in_text
+                for sh in body_shapes
+                for c in deserialize_citations(_get_tag(sh, TAG_CITATIONS))
+            )
             by_shape = self._get_citations_by_shape(slide)
             in_text_citations = tuple(c for _, cits in by_shape for c in cits if c.in_text)
             footer_only_citations = tuple(self._get_slide_footer_only_citations(slide))
             citations = (*in_text_citations, *footer_only_citations)
-            footer_shape = self._find_footer_shape(slide)
-            if footer_shape is not None:
-                footer_entries = deserialize_footer_entries(
-                    _get_tag(footer_shape, TAG_FOOTER_ENTRIES)
+            if had_raw_in_text and not citations:
+                self._sync_slide_citations_from_shapes(
+                    slide,
+                    [(sh, ()) for sh in body_shapes],
                 )
-            else:
+                footer_shape = self._find_footer_shape(slide)
+                if footer_shape is not None:
+                    footer_shape.Delete()
+                self._update_native_footer_placeholder_visibility(
+                    slide,
+                    hide_native_footer=False,
+                )
                 footer_entries = ()
+            else:
+                footer_shape = self._find_footer_shape(slide)
+                if footer_shape is not None:
+                    footer_entries = deserialize_footer_entries(
+                        _get_tag(footer_shape, TAG_FOOTER_ENTRIES)
+                    )
+                else:
+                    footer_entries = ()
 
             is_bib_continuation = _get_tag(slide, TAG_BIB_CONTINUATION) == "1"
             has_bibliography = (
@@ -2082,6 +2257,7 @@ __all__ = [
     "SlideDoc",
     "TAG_BIB_COLUMN",
     "TAG_BIB_CONTINUATION",
+    "TAG_BIB_KEYS",
     "TAG_CITATIONS",
     "TAG_FOOTER_ENTRIES",
     "TAG_ROLE",

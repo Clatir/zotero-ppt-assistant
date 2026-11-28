@@ -74,6 +74,7 @@ def test_save_and_load_config_roundtrip_all_fields(tmp_path: Path) -> None:
         json.dumps({"footer_header": "false", "font_size_pt": 12}),  # M1: str jako bool
         json.dumps({"always_on_top": "false", "font_size_pt": 12}),  # M1: str jako bool
         json.dumps({"dark_mode": "true", "font_size_pt": 12}),  # str jako bool dla dark_mode
+        json.dumps({"settings_expanded": "false", "font_size_pt": 12}),  # str jako bool dla settings_expanded
         json.dumps({"font_size_pt": True}),  # M1: bool jako int
         json.dumps({"font_size_pt": 12.7}),  # M1: float jako int
     ],

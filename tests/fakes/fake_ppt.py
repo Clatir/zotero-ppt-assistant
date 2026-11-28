@@ -116,6 +116,19 @@ class FakeSlideDoc:
         """Pomocnicza metoda testowa zwracająca wpisy bibliografii na slajdzie."""
         return list(self._get_slide(slide_index).bibliography_entries)
 
+    def get_slide_bibliography_keys(self, slide_index: int) -> tuple[str, ...]:
+        """Zwraca klucze wszystkich pozycji bibliografii ze slajdu (wraz z jego slajdami kontynuacji)."""
+        slide = self._get_slide(slide_index)
+        while slide_index > 1 and slide.is_bib_continuation:
+            slide_index -= 1
+            slide = self._get_slide(slide_index)
+        keys: list[str] = [e.key for e in slide.bibliography_entries if e.key]
+        next_idx = slide_index + 1
+        while next_idx <= len(self._slides) and self._slides[next_idx - 1].is_bib_continuation:
+            keys.extend(e.key for e in self._slides[next_idx - 1].bibliography_entries if e.key)
+            next_idx += 1
+        return tuple(dict.fromkeys(keys))
+
     def get_slide_bibliography_columns(self, slide_index: int) -> list[list[FooterEntry]]:
         """Pomocnicza metoda testowa zwracająca podział bibliografii na kolumny na slajdzie."""
         return [list(col) for col in self._get_slide(slide_index).bibliography_columns]

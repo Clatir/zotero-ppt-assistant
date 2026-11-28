@@ -233,8 +233,10 @@ def test_collections_footer_citation_and_bibliography_contracts() -> None:
         bib_font_size_pt=14,
         bib_fit_mode="split_slides",
         bib_columns=2,
+        settings_expanded=True,
     )
     assert Settings.from_dict(s.to_dict()) == s
+    assert Settings().settings_expanded is False
 
     with pytest.raises(ValueError, match="czcionki bibliografii"):
         Settings(bib_font_name="  ")
@@ -244,6 +246,8 @@ def test_collections_footer_citation_and_bibliography_contracts() -> None:
         Settings(bib_fit_mode="bad")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="kolumn bibliografii"):
         Settings(bib_columns=5)
+    with pytest.raises(ValueError, match="settings_expanded"):
+        Settings(settings_expanded="false")  # type: ignore[arg-type]
 
     doc = FakeSlideDoc(slide_count=2, active_slide_index=1, has_cursor=False)
     doc.add_footer_citation(Citation(citation_id="fc-1", keys=("KOWAL2023",), text="", in_text=False))

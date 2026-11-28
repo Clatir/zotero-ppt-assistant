@@ -23,6 +23,7 @@ from azp.engine.numbering import (
     assign_global_numbers,
     assign_slide_numbers,
     build_presentation_bibliography_entries,
+    collect_presentation_keys,
     compute_presentation_plan,
     format_citation_text,
     is_numeric_style,
@@ -55,6 +56,31 @@ class CitationEngine:
     def _new_citation_id() -> str:
         return f"cit-{uuid.uuid4().hex[:12]}"
 
+    def _collect_existing_bibliography_keys(
+        self,
+        slides: Sequence[SlideRecord],
+        target_slide_index: int | None = None,
+    ) -> tuple[str, ...]:
+        get_bib_keys = getattr(self.slide_doc, "get_slide_bibliography_keys", None)
+        if not callable(get_bib_keys):
+            return ()
+        indices: list[int] = []
+        if target_slide_index is not None:
+            indices.append(target_slide_index)
+        for s in slides:
+            if s.has_bibliography and s.slide_index not in indices:
+                indices.append(s.slide_index)
+        collected: list[str] = []
+        for idx in indices:
+            try:
+                keys = get_bib_keys(idx)
+            except Exception:
+                continue
+            for k in keys:
+                if isinstance(k, str) and k.strip():
+                    collected.append(k.strip())
+        return tuple(dict.fromkeys(collected))
+
     def _refresh_existing_bibliographies(
         self,
         planned_slides: Sequence[SlideRecord],
@@ -68,13 +94,22 @@ class CitationEngine:
         set_bib = getattr(self.slide_doc, "set_slide_bibliography", None)
         if not callable(set_bib):
             return False
-        bib_entries = build_presentation_bibliography_entries(
-            slides=planned_slides,
-            refs=refs,
-            settings=settings,
-            styles=styles,
-        )
+        pres_keys = collect_presentation_keys(planned_slides)
+        get_bib_keys = getattr(self.slide_doc, "get_slide_bibliography_keys", None)
         for slide in reversed(bib_slides):
+            extra_keys: tuple[str, ...] = ()
+            if not pres_keys and callable(get_bib_keys):
+                try:
+                    extra_keys = tuple(get_bib_keys(slide.slide_index))
+                except Exception:
+                    extra_keys = ()
+            bib_entries = build_presentation_bibliography_entries(
+                slides=planned_slides,
+                refs=refs,
+                settings=settings,
+                styles=styles,
+                extra_keys=extra_keys,
+            )
             set_bib(slide.slide_index, bib_entries, settings)
         return True
 
@@ -128,7 +163,7 @@ class CitationEngine:
         all_keys = tuple(
             dict.fromkeys(
                 [
-                    *(k for s in slides_before for c in s.citations for k in c.keys),
+                    *collect_presentation_keys(slides_before),
                     *target_keys,
                 ]
             )
@@ -146,7 +181,7 @@ class CitationEngine:
                             slide_index=s.slide_index,
                             slide_id=s.slide_id,
                             citations=tuple(c for c in s.citations if c.in_text),
-                            footer_entries=s.footer_entries,
+                            footer_entries=(),
                             has_bibliography=s.has_bibliography,
                         )
                         if has_cursor and s.slide_index == active_slide_index
@@ -314,11 +349,13 @@ class CitationEngine:
         effective_settings = self._resolve_settings(settings)
         slides = self.slide_doc.read_slides()
 
-        all_keys = tuple(
-            dict.fromkeys(
-                k for slide in slides for cit in slide.citations for k in cit.keys
-            )
+        pres_keys = collect_presentation_keys(slides)
+        bib_only_keys = (
+            self._collect_existing_bibliography_keys(slides)
+            if not pres_keys
+            else ()
         )
+        all_keys = tuple(dict.fromkeys((*pres_keys, *bib_only_keys)))
         # Pobierz opisy ze Zotero PRZED utworzeniem kopii zapasowej i zmianą prezentacji
         refs = (
             self.zotero.get_formatted_refs(all_keys, effective_settings.style_id)
@@ -372,8 +409,9 @@ class CitationEngine:
     def insert_bibliography(
         self,
         settings: Settings | None = None,
+        fallback_keys: Sequence[str] = (),
     ) -> tuple[int, int]:
-        """Wstawia lub aktualizuje spis wszystkich wykorzystanych źródeł na aktywnym slajdzie (D27).
+        """Wstawia lub aktualizuje spis wszystkich wykorzystanych źródeł na aktywnym slajdzie (D27, D28).
 
         Zwraca `(liczba_źródeł, liczba_slajdów_bibliografii)`.
         """
@@ -386,13 +424,30 @@ class CitationEngine:
         effective_settings = self._resolve_settings(settings)
         slides = self.slide_doc.read_slides()
 
-        all_keys = tuple(
+        pres_keys = collect_presentation_keys(slides)
+        clean_fallback = tuple(
             dict.fromkeys(
-                k for slide in slides for cit in slide.citations for k in cit.keys
+                k.strip() for k in fallback_keys if isinstance(k, str) and k.strip()
             )
         )
+        if pres_keys:
+            all_keys = pres_keys
+            extra_keys: tuple[str, ...] = ()
+        elif clean_fallback:
+            all_keys = clean_fallback
+            extra_keys = clean_fallback
+        else:
+            existing_bib_keys = self._collect_existing_bibliography_keys(
+                slides,
+                target_slide_index=active_slide_index,
+            )
+            all_keys = existing_bib_keys
+            extra_keys = existing_bib_keys
+
         if not all_keys:
-            raise AzpError("Brak wykorzystanych źródeł w prezentacji.")
+            raise AzpError(
+                "Brak wykorzystanych źródeł w prezentacji (zacytuj pozycje na slajdach lub zaznacz je na liście wyników)."
+            )
 
         refs = self.zotero.get_formatted_refs(all_keys, effective_settings.style_id)
         styles = self._get_styles()
@@ -401,6 +456,7 @@ class CitationEngine:
             refs=refs,
             settings=effective_settings,
             styles=styles,
+            extra_keys=extra_keys,
         )
         slides_used = self.slide_doc.set_slide_bibliography(
             active_slide_index,
@@ -465,12 +521,18 @@ class CitationEngine:
 
         return _on_rebuild
 
-    def make_bibliography_callback(self) -> Callable[[Settings], str | None]:
-        """Zwraca callback `on_insert_bibliography` kompatybilny z `AzpController` (D27)."""
+    def make_bibliography_callback(self) -> Callable[..., str | None]:
+        """Zwraca callback `on_insert_bibliography` kompatybilny z `AzpController` (D27, D28)."""
 
-        def _on_bibliography(settings: Settings) -> str | None:
+        def _on_bibliography(
+            settings: Settings,
+            fallback_keys: Sequence[str] = (),
+        ) -> str | None:
             try:
-                count, slides_used = self.insert_bibliography(settings=settings)
+                count, slides_used = self.insert_bibliography(
+                    settings=settings,
+                    fallback_keys=fallback_keys,
+                )
             except KeyError as exc:
                 detail = exc.args[0] if exc.args else str(exc)
                 raise AzpError(
